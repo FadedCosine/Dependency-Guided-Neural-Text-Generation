@@ -23,7 +23,7 @@ from fairseq.data import (
 from fairseq.data.indexed_dataset import get_available_dataset_impl
 from fairseq.dataclass import ChoiceEnum, FairseqDataclass
 from fairseq.data.shorten_dataset import maybe_shorten_dataset
-from sentence_with_dependency_dataset import SentenceWithDependencyDataset, WrapDependencyDataset
+from fairseq.data.sentence_with_dependency_dataset import SentenceWithDependencyDataset, WrapDependencyDataset
 import os
 from omegaconf import II
 

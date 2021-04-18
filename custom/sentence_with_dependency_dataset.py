@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from fairseq.data import FairseqDataset, plasma_utils
+from fairseq.data import FairseqDataset, plasma_utils, data_utils
 from fairseq.data.indexed_dataset import best_fitting_int_dtype
 from typing import Tuple
 
@@ -250,7 +250,7 @@ class WrapDependencyDataset(FairseqDataset):
     def __getitem__(self, index):
         source, target_set_list = self.dataset[index]
         seq_len = source.size()[-1]
-        target = torch.zeros((target, len(self.vocab)))
+        target = torch.zeros((seq_len, len(self.vocab)))
         for idx, target_set in enumerate(target_set_list):
             target[idx, target_set] = 1
         return {"id": index, "source": source, "target": target}

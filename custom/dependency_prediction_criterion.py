@@ -1,4 +1,5 @@
 import math
+import torch
 from dataclasses import dataclass
 import torch.nn.functional as F
 from fairseq import metrics, utils
@@ -11,6 +12,7 @@ class DependencyBCE(FairseqCriterion):
     def __init__(self, task, sentence_avg):
         super().__init__(task)
         self.sentence_avg = sentence_avg
+      
     def forward(self, model, sample, reduce=True):
         net_output = model(**sample["net_input"])
         loss = self.compute_loss(model, net_output, sample)
@@ -23,9 +25,11 @@ class DependencyBCE(FairseqCriterion):
             "nsentences": sample["target"].size(0),
             "sample_size": sample_size,
         }
-
-        preds = torch.round(F.sigmoid(net_output[0])).int()
+        preds = torch.round(torch.sigmoid(net_output[0])).int()
         T = torch.logical_and(preds, sample["target"].int())
+        """
+        torch.sum(T) 相比于 torch.sum(preds) 太小了，所以precision约等于0
+        """
         P = torch.sum(T) / torch.sum(preds)
         R = torch.sum(T) / torch.sum(sample["target"].int())
         logging_output["ncorrect"] = torch.sum(T) 
@@ -38,13 +42,20 @@ class DependencyBCE(FairseqCriterion):
         # logits = logits.view(-1, logits.size(-1)) 
         target = sample["target"]
         lengths = sample["seq_true_lengths"]
-        padding_mask = torch.ones(target.size())
+        padding_mask = torch.ones(target.size()).to(logits.device)
         for idx, seq_len in enumerate(lengths):
             padding_mask[idx, seq_len:, :] = 0
         # target = target.view(-1, target.size(-1)) 
         # padding_mask = padding_mask.view(-1, padding_mask.size(-1)) 
         assert logits.size() == target.size(), "model output logits's size must be consist with target's size!"
+
+        # target2d = target.view(-1, target.size(-1)) 
+        # pos_count = torch.sum(target2d, 0).cpu() 
+        # pos_weight = (torch.ones(target2d.size(-1))* sum(lengths).cpu()  - pos_count) / (pos_count + 1e-5)
+        # criterion = BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight.to(logits.device))
+        
         criterion = BCEWithLogitsLoss(reduction="none")
+
         return torch.sum(criterion(logits, target) * padding_mask)
 
     @staticmethod
