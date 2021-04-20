@@ -33,7 +33,7 @@ SHORTEN_METHOD_CHOICES = ChoiceEnum(["none", "truncate", "random_crop"])
 logger = logging.getLogger(__name__)
 
 @dataclass
-class LanguageModelingConfig(FairseqDataclass):
+class DependencyModelingConfig(FairseqDataclass):
     data: Optional[str] = field(
         default=None, metadata={"help": "path to data directory"}
     )
@@ -78,6 +78,17 @@ class LanguageModelingConfig(FairseqDataclass):
             'e.g., "train,valid" (default: all dataset splits)'
         },
     )
+    # TODO common vars below add to parent
+    seed: int = II("common.seed")
+    dataset_impl: Optional[ChoiceEnum(get_available_dataset_impl())] = II(
+        "dataset.dataset_impl"
+    )
+    data_buffer_size: int = II("dataset.data_buffer_size")
+    tpu: bool = II("common.tpu")
+    use_plasma_view: bool = II("common.use_plasma_view")
+    plasma_path: str = II("common.plasma_path")
+
+    
     dependency: str = field(
         default="/home/yangzhixian/DependencyGuided/DG/data/news/dependency",
         metadata={
@@ -90,17 +101,8 @@ class LanguageModelingConfig(FairseqDataclass):
             "help": "file suffix of dependency head file"
         },
     )
-    # TODO common vars below add to parent
-    seed: int = II("common.seed")
-    dataset_impl: Optional[ChoiceEnum(get_available_dataset_impl())] = II(
-        "dataset.dataset_impl"
-    )
-    data_buffer_size: int = II("dataset.data_buffer_size")
-    tpu: bool = II("common.tpu")
-    use_plasma_view: bool = II("common.use_plasma_view")
-    plasma_path: str = II("common.plasma_path")
 
-@register_task("dependency_modeling", dataclass=LanguageModelingConfig)
+@register_task("dependency_modeling", dataclass=DependencyModelingConfig)
 class DependencyModelingTask(LegacyFairseqTask):
     """
     Train a DependencyDecoder
