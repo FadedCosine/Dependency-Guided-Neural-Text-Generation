@@ -1,17 +1,17 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional, List, Tuple
 
-from fairseq import options, utils
+from fairseq import options, utils, hub_utils
 from fairseq.dataclass import ChoiceEnum, FairseqDataclass
 from fairseq.models import (
-    TransformerLanguageModel,
+    FairseqLanguageModel,
     register_model,
     register_model_architecture,
 )
+from fairseq.models.transformer_lm import TransformerLanguageModel
 from fairseq.models.transformer import (
     TransformerDecoder,
-    TransformerEncoder,
-    TransformerModel,
+    DEFAULT_MIN_PARAMS_TO_WRAP, Embedding,
     base_architecture,
 )
 from fairseq.models.transformer_lm import (
@@ -20,6 +20,9 @@ from fairseq.models.transformer_lm import (
 from fairseq.modules import AdaptiveInput, CharacterTokenEmbedder
 from omegaconf import II
 
+import torch
+import torch.nn as nn
+from torch import Tensor
 
 
 @dataclass
@@ -184,10 +187,16 @@ class DPTransformerLanguageModelConfig(FairseqDataclass):
     max_target_positions: Optional[int] = II("task.max_target_positions")
     tpu: bool = II("common.tpu")
 
+    data_path_for_load_model: str = field(
+        default="/home/yangzhixian/DependencyGuided/DG/data/news/data-bin",
+        metadata={
+            "help": "path to data"
+        },
+    )
     alignment_heads: int = field(
         default=1, metadata={"help": "number of attention heads to be used for pointing"}
     )
-    alignment_heads: int = field(
+    alignment_layer: int = field(
         default=-1, metadata={"help": "layer number to be used for pointing (0 corresponding to the bottommost layer)"}
     )
     dependency_model_path: str = field(
@@ -196,17 +205,32 @@ class DPTransformerLanguageModelConfig(FairseqDataclass):
             "help": "model path of dependency decoder model"
         },
     )
+    dependency_model_filename: str = field(
+        default="checkpoint_best.pt",
+        metadata={
+            "help": "model filename of dependency decoder model"
+        },
+    )
     force_generation: float = field(
-        default=None,
+        default=-1,
         metadata={
             "help": 'set the vocabulary distribution weight to P, '
                     'instead of predicting it from the input (1.0 '
                     'corresponding to generation, 0.0 to pointing)'
         },
     )
+    freeze_dependency_decoder: bool = field(
+        default=True,
+        metadata={
+            "help": 'if freeze the dependency decoder while training DPTransformerLM'
+        },
+    )
+    
 
 @register_model("dependency_pointer_transformer_lm", dataclass=DPTransformerLanguageModelConfig)
-class DPTransformerLM(TransformerLanguageModel):
+class DPTransformerLM(FairseqLanguageModel):
+    def __init__(self, decoder):
+        super().__init__(decoder)
     @classmethod
     def build_model(cls, args, task):
         """Build a new model instance."""
@@ -256,7 +280,10 @@ class DPTransformerLM(TransformerLanguageModel):
             assert args.decoder_input_dim == args.decoder_output_dim
 
         decoder = DGTransformerPointerGeneratorDecoder(args, task.target_dictionary, embed_tokens, no_encoder_attn=True)
-        return cls(args, decoder)
+        # decoder = TransformerDecoder(
+        #     args, task.target_dictionary, embed_tokens, no_encoder_attn=True
+        # )
+        return cls(decoder)
     @classmethod
     def build_embedding(cls, args, dictionary, embed_dim, path=None):
         embed_tokens = Embedding(len(dictionary), embed_dim, dictionary.pad())
@@ -283,13 +310,24 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         self.alignment_layer = args.alignment_layer
         input_embed_dim = embed_tokens.embedding_dim
         assert args.dependency_model_path is not None
-        self.dependency_decoder = TransformerLanguageModel.from_pretrained(
-                args.dependency_model_path,
-                checkpoint_file=args.dependency_model_filename,
-                data_name_or_path=args.data,
-                )
+        assert args.dependency_model_filename is not None
+        
+        self.dependency_module = hub_utils.from_pretrained(
+            args.dependency_model_path,
+            args.dependency_model_filename,
+            args.data_path_for_load_model,
+        )
+        self.dependency_decoder = self.dependency_module["models"][0]
+        # freeze pretrained model
+        if args.freeze_dependency_decoder:
+            for param in self.dependency_decoder.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.dependency_decoder.parameters():
+                param.requires_grad = True
         # Generation probabilities / interpolation coefficients are predicted
         # from the both decoders input embedding (the same), the token decoder output, and the dependency decoder output
+        
         p_gen_input_size = input_embed_dim + self.output_embed_dim + self.dependency_decoder.decoder.output_embed_dim
         self.project_p_gens = nn.Linear(p_gen_input_size, 1)
         nn.init.zeros_(self.project_p_gens.bias)
@@ -329,6 +367,7 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         """
         # The normal Transformer model doesn't pass the alignment_layer and
         # alignment_heads parameters correctly. We use our local variables.
+        # print("prev_output_tokens size is : ", prev_output_tokens.size())
         tok_x, tok_extra = self.extract_features(
             prev_output_tokens,
             encoder_out=encoder_out,
@@ -336,7 +375,7 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
             alignment_layer=self.alignment_layer,
             alignment_heads=self.alignment_heads,
         )
-
+        
         dep_x, dep_extra = self.dependency_decoder.extract_features(
             prev_output_tokens,
             encoder_out=encoder_out,
@@ -354,8 +393,11 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
             p_gens = self.project_p_gens(predictors)
             p_gens = torch.sigmoid(p_gens)
             dep_attn: Optional[Tensor] = dep_extra["attn"][0]
-            assert attn is not None
-            tok_x = self.output_layer(tok_x, dep_x, attn, encoder_out["src_tokens"][0], p_gens)
+            # print("tok_attn is : ", tok_extra["attn"][0])
+            
+            assert dep_attn is not None
+            tok_x = self.output_layer(tok_x, dep_x, dep_attn, p_gens)
+        return tok_x, tok_extra
 
     def output_layer(
         self,
@@ -368,7 +410,7 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         """
         Project dependency attention features to the weight of dependency probabilities
         """
-        if self.force_p_gen is not None:
+        if self.force_p_gen > 0:
             p_gens = self.force_p_gen
 
         if self.adaptive_softmax is None:
@@ -376,32 +418,27 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         else:
             next_token_logits = tok_features
 
-        if self.dependency_decoder.adaptive_softmax is None:
-            dep_token_logits = self.dependency_decoder.output_projection(dep_features)
+        if self.dependency_decoder.decoder.adaptive_softmax is None:
+            dep_token_logits = self.dependency_decoder.decoder.output_projection(dep_features)
         else:
             dep_token_logits = dep_features
 
         # if dep_loss_type == "CE":
-        dep_token_logits = self.dependency_decoder.get_normalized_probs(
+        dep_token_logits = self.dependency_decoder.get_normalized_probs_scriptable(
             (dep_token_logits, None), log_probs=False, sample=None
         )
         # elif dep_loss_type == "BCE":
 
-        batch_size = next_token_logits.shape[0]
-        output_length = next_token_logits.shape[1]
-        
-        gen_dists = self.get_normalized_probs(
+        gen_dists = self.get_normalized_probs_scriptable(
             (next_token_logits, None), log_probs=False, sample=None
         )
-        
         gen_dists = torch.mul(gen_dists, p_gens)
-
+        
         assert dep_attn.shape[2] == dep_token_logits.shape[1]
-        weighted_sum_dep_dists = torch.bmm(dep_attn,dep_token_logits)
+        weighted_sum_dep_dists = torch.bmm(dep_attn, dep_token_logits)
         weighted_sum_dep_dists = torch.mul(weighted_sum_dep_dists, 1 - p_gens)
 
         return gen_dists + weighted_sum_dep_dists
-
     def get_normalized_probs(
         self, 
         net_output: Tuple[Tensor, Optional[Dict[str, List[Optional[Tensor]]]]],
@@ -416,6 +453,8 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         # Make sure the probabilities are greater than zero when returning log
         # probabilities.
         return probs.clamp(1e-10, 1.0).log() if log_probs else probs
+
+
 
 
 def base_lm_architecture(args):
@@ -479,20 +518,16 @@ def base_lm_architecture(args):
     args.offload_activations = getattr(args, "offload_activations", False)
     if args.offload_activations:
         args.checkpoint_activations = True
+    args.data_path_for_load_model = getattr(args, "data_path_for_load_model", "/home/yangzhixian/DependencyGuided/DG/data/news/data-bin")
     args.alignment_heads = getattr(args, "alignment_heads", 1)
     args.alignment_layer = getattr(args, "alignment_layer", -1)
     if args.alignment_layer < 0:
         args.alignment_layer = args.decoder_layers + args.alignment_layer
     args.dependency_model_path = getattr(args, "dependency_model_path", "/home/yangzhixian/DependencyGuided/DG/checkpoints/new/dependency_predictor")
-    args.force_generation = getattr(args, "force_generation", None)
+    args.dependency_model_filename = getattr(args, "dependency_model_filename", "checkpoint_best.pt")
+    args.force_generation = getattr(args, "force_generation", -1)
+    args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", True)
     
-@register_model_architecture("dependency_pointer_transformer_lm", "dependency_pointer_transformer_lm_big")
-def dependency_pointer_transformer_lm_big(args):
-    args.decoder_layers = getattr(args, "decoder_layers", 12)
-    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 1024)
-    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 4096)
-    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
-    base_lm_architecture(args)
 
 @register_model_architecture("dependency_pointer_transformer_lm", "dependency_pointer_transformer_lm_big")
 def dependency_pointer_transformer_lm_big(args):
