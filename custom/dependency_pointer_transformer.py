@@ -109,6 +109,45 @@ class DPTransformer(TransformerModel):
             embed_tokens,
             no_encoder_attn=getattr(args, "no_cross_attention", False),
         )
+    def forward(
+        self,
+        src_tokens,
+        src_lengths,
+        prev_output_tokens,
+        return_all_hiddens: bool = True,
+        features_only: bool = False,
+        alignment_layer: Optional[int] = None,
+        alignment_heads: Optional[int] = None,
+    ):
+        # In DPTransformer, nexttoken_decoder and dependency_decoder share the same encoder
+        encoder_out = self.encoder(
+                src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens
+            )
+        # the code in DGTransformerPointerGeneratorDecoder will help to train dependency_decoder and nexttoken_decoder, respectively
+        decoder_out = self.decoder(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            features_only=features_only,
+            alignment_layer=alignment_layer,
+            alignment_heads=alignment_heads,
+            src_lengths=src_lengths,
+            return_all_hiddens=return_all_hiddens,
+        )
+        return decoder_out
+    def get_normalized_probs(
+        self, 
+        net_output: Tuple[Tensor, Optional[Dict[str, List[Optional[Tensor]]]]],
+        log_probs: bool,
+        sample: Optional[Dict[str, Tensor]] = None,
+    ):
+        """
+        Get normalized probabilities (or log probs) from a net's output.
+        Pointer-generator network output is already normalized.
+        """
+        probs = net_output[0]
+        # Make sure the probabilities are greater than zero when returning log
+        # probabilities.
+        return probs.clamp(1e-10, 1.0).log() if log_probs else probs
 
 class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
     """
@@ -207,10 +246,10 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
                 alignment_heads=self.alignment_heads,
             )
             if not features_only:
-                dep_x = self.dependency_decoder.output_layer(dep_x_all_output)
+                dep_x = self.output_layer(None, dep_x_all_output, None, None)
             return dep_x, dep_extra
         else:
-            tok_x, tok_extra = self.extract_features(
+            tok_x, tok_extra = self.nexttoken_decoder.extract_features(
                 prev_output_tokens,
                 encoder_out=encoder_out,
                 incremental_state=incremental_state,
@@ -234,8 +273,8 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
                 else:
                     dep_x_cur = dep_x_all_output
 
-                prev_output_embed = self.embed_tokens(prev_output_tokens)
-                prev_output_embed *= self.embed_scale
+                prev_output_embed = self.nexttoken_decoder.embed_tokens(prev_output_tokens)
+                prev_output_embed *= self.nexttoken_decoder.embed_scale
             
                 predictors = torch.cat((prev_output_embed, tok_x, dep_x_cur), 2)
                 p_gens = self.project_p_gens(predictors)
@@ -255,38 +294,51 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
         p_gens: Tensor
     ) -> Tensor:
         """
+        output for dependency decoder only or
         Project dependency attention features to the weight of dependency probabilities
+        
+        The return is the truth probabilities, not logits.
         """
-        if self.force_p_gen > 0:
-            p_gens = self.force_p_gen
-
-        if self.adaptive_softmax is None:
-            next_token_logits = self.output_projection(tok_features)
+        if tok_features is None:
+            if self.dependency_decoder.decoder.adaptive_softmax is None:
+                dep_token_logits = self.dependency_decoder.decoder.output_projection(dep_features)
+            else:
+                dep_token_logits = dep_features
+            dep_token_logits = self.dependency_decoder.get_normalized_probs_scriptable(
+                (dep_token_logits, None), log_probs=False, sample=None
+            )
+            return dep_token_logits
         else:
-            next_token_logits = tok_features
+            if self.force_p_gen > 0:
+                p_gens = self.force_p_gen
 
-        if self.dependency_decoder.decoder.adaptive_softmax is None:
-            dep_token_logits = self.dependency_decoder.decoder.output_projection(dep_features)
-        else:
-            dep_token_logits = dep_features
+            if self.nexttoken_decoder.adaptive_softmax is None:
+                next_token_logits = self.nexttoken_decoder.output_projection(tok_features)
+            else:
+                next_token_logits = tok_features
 
-        # if dep_loss_type == "CE":
-        dep_token_logits = self.dependency_decoder.get_normalized_probs_scriptable(
-            (dep_token_logits, None), log_probs=False, sample=None
-        )
-        # elif dep_loss_type == "BCE":
+            if self.dependency_decoder.decoder.adaptive_softmax is None:
+                dep_token_logits = self.dependency_decoder.decoder.output_projection(dep_features)
+            else:
+                dep_token_logits = dep_features
 
-        gen_dists = self.get_normalized_probs_scriptable(
-            (next_token_logits, None), log_probs=False, sample=None
-        )
-        gen_dists = torch.mul(gen_dists, p_gens)
-        # print("dep_attn size is : ", dep_attn.size())
-        # print("dep_token_logits size is : ", dep_token_logits.size())
-        assert dep_attn.shape[2] == dep_token_logits.shape[1]
-        weighted_sum_dep_dists = torch.bmm(dep_attn, dep_token_logits)
-        weighted_sum_dep_dists = torch.mul(weighted_sum_dep_dists, 1 - p_gens)
+            # if dep_loss_type == "CE":
+            dep_token_logits = self.dependency_decoder.get_normalized_probs_scriptable(
+                (dep_token_logits, None), log_probs=False, sample=None
+            )
+            # elif dep_loss_type == "BCE":
 
-        return gen_dists + weighted_sum_dep_dists
+            gen_dists = self.nexttoken_decoder.get_normalized_probs_scriptable(
+                (next_token_logits, None), log_probs=False, sample=None
+            )
+            gen_dists = torch.mul(gen_dists, p_gens)
+            # print("dep_attn size is : ", dep_attn.size())
+            # print("dep_token_logits size is : ", dep_token_logits.size())
+            assert dep_attn.shape[2] == dep_token_logits.shape[1]
+            weighted_sum_dep_dists = torch.bmm(dep_attn, dep_token_logits)
+            weighted_sum_dep_dists = torch.mul(weighted_sum_dep_dists, 1 - p_gens)
+
+            return gen_dists + weighted_sum_dep_dists
     def get_normalized_probs(
         self, 
         net_output: Tuple[Tensor, Optional[Dict[str, List[Optional[Tensor]]]]],
