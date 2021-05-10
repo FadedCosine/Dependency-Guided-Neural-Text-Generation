@@ -1,3 +1,14 @@
+from typing import Any, Dict, List, Optional, Tuple
+
+import torch
+import torch.nn as nn
+from fairseq import utils
+from fairseq.distributed import fsdp_wrap
+from fairseq.models import (
+    FairseqIncrementalDecoder,
+    register_model,
+    register_model_architecture,
+)
 from fairseq.models.transformer import (
     DEFAULT_MAX_SOURCE_POSITIONS,
     DEFAULT_MAX_TARGET_POSITIONS,
@@ -7,7 +18,7 @@ from fairseq.models.transformer import (
     DEFAULT_MIN_PARAMS_TO_WRAP, Embedding,
     base_architecture,
 )
-
+from torch import Tensor
 
 @register_model("dependency_pointer_transformer")
 class DPTransformer(TransformerModel):
@@ -355,3 +366,15 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
         return probs.clamp(1e-10, 1.0).log() if log_probs else probs
 
 
+@register_model_architecture(
+    "dependency_pointer_transformer", "dependency_pointer_transformer"
+)
+def dependency_pointer_transformer(args):
+    args.alignment_heads = getattr(args, "alignment_heads", 1)
+    args.alignment_layer = getattr(args, "alignment_layer", -1)
+    base_architecture(args)
+    if args.alignment_layer < 0:
+        args.alignment_layer = args.decoder_layers + args.alignment_layer
+    args.force_generation = getattr(args, "force_generation", -1)
+    args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", True)
+    args.is_train_dependency = getattr(args, "is_train_dependency", True)
