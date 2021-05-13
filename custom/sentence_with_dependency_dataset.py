@@ -156,22 +156,23 @@ class SentenceWithDependencyDataset(FairseqDataset):
         item = buffer[s:e]
         item_dependency = self.dataset_dependency[index]
         """
-        每个item相较于原句要在尾部多一个eos，这是在preprocess的时候加上的;
+        每个item相较于原句要在尾部多一个eos，这是在fairseq-preprocess的时候加上的;
         另外，我期望self.dataset_dependency[index]依然是 和syndehead文件中的每一行一模一样的列表
         """
 
         source = torch.cat([item.new([self.eos]), buffer[0 : e - 1]])
-        dependency_set_list = [[] for _ in range(length)]
+        dependency_token_list = [[] for _ in range(length)]
+        dependency_token_list[-1].append(self.eos)
         for i, head in enumerate(item_dependency):
             cur_idx = i + 1
             if cur_idx < head:
-                dependency_set_list[cur_idx].append(source[head].item())
+                dependency_token_list[cur_idx].append(source[head].item())
             elif cur_idx > head:
-                dependency_set_list[head].append(source[cur_idx].item())
+                dependency_token_list[head].append(source[cur_idx].item())
             else:
                 raise ValueError("Improssible! One token's dependency head is itself.")
-        #这里没用vocab，所以在下一个WrapDependencyDataset中把dependency_set_list转换成dependency_set_indicator
-        return source, dependency_set_list
+        #这里没用vocab，所以在下一个WrapDependencyDataset中把dependency_token_list转换成dependency_set_indicator
+        return source, dependency_token_list
     @property
     def supports_prefetch(self):
         return getattr(self.dataset, "supports_prefetch", False)
@@ -251,6 +252,7 @@ class WrapDependencyDataset(FairseqDataset):
         source, target_set_list = self.dataset[index]
         seq_len = source.size()[-1]
         target = torch.zeros((seq_len, len(self.vocab)))
+        
         for idx, target_set in enumerate(target_set_list):
             target[idx, target_set] = 1
         return {"id": index, "source": source, "target": target}

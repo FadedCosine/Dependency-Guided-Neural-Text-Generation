@@ -23,7 +23,7 @@ from torch import Tensor
 @register_model("dependency_pointer_transformer")
 class DPTransformer(TransformerModel):
     def __init__(self, args, encoder, decoder):
-        super().__init__(encoder, decoder)
+        super().__init__(args, encoder, decoder)
         self.args = args
         self.supports_align_args = True
         self.is_train_dependency = args.is_train_dependency
@@ -180,8 +180,6 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
         self.alignment_heads = args.alignment_heads
         self.alignment_layer = args.alignment_layer
         input_embed_dim = embed_tokens.embedding_dim
-        assert args.dependency_model_path is not None
-        assert args.dependency_model_filename is not None
         
         self.nexttoken_decoder = TransformerDecoder(
             args,
@@ -206,7 +204,7 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
         # Generation probabilities / interpolation coefficients are predicted
         # from the both decoders input embedding (the same), the token decoder output, and the dependency decoder output
         
-        p_gen_input_size = input_embed_dim + self.output_embed_dim + self.dependency_decoder.decoder.output_embed_dim
+        p_gen_input_size = input_embed_dim + self.nexttoken_decoder.output_embed_dim + self.dependency_decoder.output_embed_dim
         self.project_p_gens = nn.Linear(p_gen_input_size, 1)
         nn.init.zeros_(self.project_p_gens.bias)
 
@@ -311,8 +309,8 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
         The return is the truth probabilities, not logits.
         """
         if tok_features is None:
-            if self.dependency_decoder.decoder.adaptive_softmax is None:
-                dep_token_logits = self.dependency_decoder.decoder.output_projection(dep_features)
+            if self.dependency_decoder.adaptive_softmax is None:
+                dep_token_logits = self.dependency_decoder.output_projection(dep_features)
             else:
                 dep_token_logits = dep_features
             dep_token_logits = self.dependency_decoder.get_normalized_probs_scriptable(
@@ -328,8 +326,8 @@ class DGTransformerPointerGeneratorDecoder(FairseqIncrementalDecoder):
             else:
                 next_token_logits = tok_features
 
-            if self.dependency_decoder.decoder.adaptive_softmax is None:
-                dep_token_logits = self.dependency_decoder.decoder.output_projection(dep_features)
+            if self.dependency_decoder.adaptive_softmax is None:
+                dep_token_logits = self.dependency_decoder.output_projection(dep_features)
             else:
                 dep_token_logits = dep_features
 
@@ -376,5 +374,17 @@ def dependency_pointer_transformer(args):
     if args.alignment_layer < 0:
         args.alignment_layer = args.decoder_layers + args.alignment_layer
     args.force_generation = getattr(args, "force_generation", -1)
-    args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", True)
+    args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", False)
     args.is_train_dependency = getattr(args, "is_train_dependency", True)
+
+@register_model_architecture("dependency_pointer_transformer", "dependency_pointer_transformer_iwslt_de_en")
+def transformer_iwslt_de_en(args):
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 512)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
+    args.encoder_layers = getattr(args, "encoder_layers", 6)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 512)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 1024)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 4)
+    args.decoder_layers = getattr(args, "decoder_layers", 6)
+    base_architecture(args)

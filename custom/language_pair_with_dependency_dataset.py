@@ -20,7 +20,7 @@ def collate(
     if len(samples) == 0:
         return {}
     def merge(key, left_pad, move_eos_to_beginning=False, pad_to_length=None):
-        if key == "target_dependency": # We force no left_pad and pad_to_length
+        if key == "target": # We force no left_pad and pad_to_length
             values = [s[key] for s in samples]
             vocab_size = values[0].size(-1)
             size = max(v.size(0) for v in values)
@@ -63,20 +63,21 @@ def collate(
     src_tokens = src_tokens.index_select(0, sort_order)
     prev_output_tokens = None
     target = None
-    if samples[0].get("target_dependency", None) is not None:
+    if samples[0].get("target", None) is not None:
         target = merge(
-            "target_dependency",
+            "target",
             left_pad=False, # We force no left_pad and pad_to_length
             pad_to_length=None
         )
         target = target.index_select(0, sort_order)
         tgt_dependency_lengths = torch.LongTensor(
-            [s["target_dependency"].size(0) for s in samples]
+            [s["target"].size(0) for s in samples]
         ).index_select(0, sort_order)
         tgt_lengths = torch.LongTensor(
-            [s["target"].ne(pad_idx).long().sum() for s in samples]
+            [s["target_sequence"].ne(pad_idx).long().sum() for s in samples]
         ).index_select(0, sort_order)
-        assert tgt_dependency_lengths == tgt_lengths
+      
+        assert tgt_dependency_lengths.equal(tgt_lengths)
         ntokens = tgt_lengths.sum().item()
 
         if samples[0].get("prev_output_tokens", None) is not None:
@@ -85,7 +86,7 @@ def collate(
             # we create a shifted version of targets for feeding the
             # previous output token(s) into the next decoder step
             prev_output_tokens = merge(
-                "target",
+                "target_sequence",
                 left_pad=False, # We force no left_pad and pad_to_length
                 move_eos_to_beginning=True,
                 pad_to_length=None,
@@ -251,8 +252,8 @@ class LanguagePairWithDependencyDataset(FairseqDataset):
         example = {
             "id": index,
             "source": src_item,
-            "target": tgt_item,
-            "target_dependency": tgt_dependency_indicator,
+            "target": tgt_dependency_indicator,
+            "target_sequence": tgt_item,
         }
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]
