@@ -1,6 +1,7 @@
 import os
 import torch
 import numpy as np
+from torch.utils.data import Dataset
 from collections import Counter
 
 
@@ -71,7 +72,7 @@ class CorpusSentence(object):
         with open(path, 'r') as f:
             tokens = 0
             for line in f:
-                words = line.split() + ['<eos>']
+                words = ['<bos>'] + line.split() + ['<eos>']
                 lengths.append(len(words))
                 for word in words:
                     self.dictionary.add_word(word)
@@ -87,7 +88,7 @@ class CorpusSentence(object):
                     cur_line_ids.append(self.dictionary.word2idx[word])
                 ids.append(cur_line_ids)
 
-        return ids, lengths
+        return np.array(ids), lengths
 
 class DependencyCorpus(CorpusSentence):
     def __init__(self, data_path, dependency_path, train_filename, vaild_filename, test_filename):
@@ -119,8 +120,7 @@ class DependencyCorpus(CorpusSentence):
         dependency_token_list = []
         for idx in range(len(token_list)):
             cur_dep_token_list = [[] for _ in range(len_list[idx])]
-            # 这里在首部加eos构造source是fairseq的历史遗留问题
-            source = [self.dictionary.word2idx('<eos>')] + token_list[idx][:-1]
+            source = token_list[idx][:-1]
             cur_dep_token_list[-1].append(self.dictionary.word2idx('<eos>'))
             for i, head in enumerate(head_list[idx]):
                 cur_idx = i + 1
@@ -132,4 +132,22 @@ class DependencyCorpus(CorpusSentence):
                     raise ValueError("Improssible! One token's dependency head is itself.")
             dependency_token_list.append(cur_dep_token_list)
             #dependency_token_list只是每个句子的每个位置的于其有dependency关系的token id 的list，之后在batchify中转换成dependency_set_indicator
-    return cur_dep_token_list
+        return np.array(dependency_token_list)
+
+class SentenceWithDependencyDataset(Dataset):
+    def __init__(self, sentence_data, data_lengths, dependency_token_data, dictionary):
+        self.sorted_lengths, self.sorted_idx = data_lengths.sort(0, descending=True)
+        self.sentence_data = sentence_data[self.sorted_idx]
+        self.dependency_token_data = dependency_token_data[self.sorted_idx]
+        self.dictionary = dictionary
+    def __len__(self):
+        return len(self.sentence_data)
+    def __getitem__(self, index):
+        source = torch.LongTensor(self.sentence_data[index][:-1])
+        target_set_list = self.dependency_token_data[index]
+        seq_len = source.size()[-1]
+        target = torch.zeros((seq_len, self.dictionary.length()))
+        
+        for idx, target_set in enumerate(target_set_list):
+            target[idx, target_set] = 1
+        return {"id": index, "source": source, "target": target}
