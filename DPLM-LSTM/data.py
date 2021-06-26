@@ -87,40 +87,49 @@ class CorpusSentence(object):
                     cur_line_ids.append(self.dictionary.word2idx[word])
                 ids.append(cur_line_ids)
 
-        return np.array(ids), lengths
+        return ids, lengths
 
 class DependencyCorpus(CorpusSentence):
     def __init__(self, data_path, dependency_path, train_filename, vaild_filename, test_filename):
         super().__init__(data_path)
-        train_dataset_dependency = []
+        self.train_dependency_head = []
         with open(os.path.join(dependency_path, train_filename), "r", encoding="utf-8") as f:
             for line in f:
-                train_dataset_dependency.append(eval(line.strip("\n")))
-        valid_dataset_dependency = []
+                self.train_dependency_head.append(eval(line.strip("\n")))
+        self.valid_dependency_head = []
         with open(os.path.join(dependency_path, vaild_filename), "r", encoding="utf-8") as f:
             for line in f:
-                valid_dataset_dependency.append(eval(line.strip("\n")))
-        test_dataset_dependency = []
+                self.valid_dependency_head.append(eval(line.strip("\n")))
+        self.test_dependency_head = []
         with open(os.path.join(dependency_path, test_filename), "r", encoding="utf-8") as f:
             for line in f:
-                test_dataset_dependency.append(eval(line.strip("\n")))
-        if len(train_dataset_dependency) == 0:
+                self.test_dependency_head.append(eval(line.strip("\n")))
+        if len(self.train_dataset_dependency) == 0:
             raise FileNotFoundError(f"Dataset dependency not found: {dependency_path}")
-    def build_dependency_token_list():
+        
+        self.train_dep_token_list = self.build_dependency_token_list(self.train, self.train_lengths, self.train_dependency_head)
+        self.valid_dep_token_list = self.build_dependency_token_list(self.valid, self.valid_lengths, self.valid_dependency_head)
+        self.test_dep_token_list = self.build_dependency_token_list(self.test, self.test_lengths, self.test_dependency_head)
+
+
+    def build_dependency_token_list(token_list, len_list, head_list):
         """
         构造self.train等的dependency token list
         """
-        # 这里在首部加eos构造source是fairseq的历史遗留问题
-        source = torch.cat([item.new([self.eos]), buffer[0 : e - 1]])
-        dependency_token_list = [[] for _ in range(length)]
-        dependency_token_list[-1].append(self.eos)
-        for i, head in enumerate(item_dependency):
-            cur_idx = i + 1
-            if cur_idx < head:
-                dependency_token_list[cur_idx].append(source[head].item())
-            elif cur_idx > head:
-                dependency_token_list[head].append(source[cur_idx].item())
-            else:
-                raise ValueError("Improssible! One token's dependency head is itself.")
-        #这里没用vocab，所以在下一个WrapDependencyDataset中把dependency_token_list转换成dependency_set_indicator
-
+        dependency_token_list = []
+        for idx in range(len(token_list)):
+            cur_dep_token_list = [[] for _ in range(len_list[idx])]
+            # 这里在首部加eos构造source是fairseq的历史遗留问题
+            source = [self.dictionary.word2idx('<eos>')] + token_list[idx][:-1]
+            cur_dep_token_list[-1].append(self.dictionary.word2idx('<eos>'))
+            for i, head in enumerate(head_list[idx]):
+                cur_idx = i + 1
+                if cur_idx < head:
+                    cur_dep_token_list[cur_idx].append(source[head].item())
+                elif cur_idx > head:
+                    cur_dep_token_list[head].append(source[cur_idx].item())
+                else:
+                    raise ValueError("Improssible! One token's dependency head is itself.")
+            dependency_token_list.append(cur_dep_token_list)
+            #dependency_token_list只是每个句子的每个位置的于其有dependency关系的token id 的list，之后在batchify中转换成dependency_set_indicator
+    return cur_dep_token_list
