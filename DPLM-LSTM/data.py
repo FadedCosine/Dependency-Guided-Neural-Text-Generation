@@ -108,6 +108,19 @@ class DependencyCorpus(CorpusSentence):
             raise FileNotFoundError(f"Dataset dependency not found: {dependency_path}")
     def build_dependency_token_list():
         """
-        self.train等
+        构造self.train等的dependency token list
         """
+        # 这里在首部加eos构造source是fairseq的历史遗留问题
+        source = torch.cat([item.new([self.eos]), buffer[0 : e - 1]])
+        dependency_token_list = [[] for _ in range(length)]
+        dependency_token_list[-1].append(self.eos)
+        for i, head in enumerate(item_dependency):
+            cur_idx = i + 1
+            if cur_idx < head:
+                dependency_token_list[cur_idx].append(source[head].item())
+            elif cur_idx > head:
+                dependency_token_list[head].append(source[cur_idx].item())
+            else:
+                raise ValueError("Improssible! One token's dependency head is itself.")
+        #这里没用vocab，所以在下一个WrapDependencyDataset中把dependency_token_list转换成dependency_set_indicator
 
