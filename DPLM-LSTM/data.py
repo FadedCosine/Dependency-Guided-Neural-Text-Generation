@@ -63,6 +63,7 @@ class CorpusSentence(object):
         self.train, self.train_lengths = self.tokenize(os.path.join(path, 'train.txt'))
         self.valid, self.valid_lengths  = self.tokenize(os.path.join(path, 'valid.txt'))
         self.test, self.test_lengths  = self.tokenize(os.path.join(path, 'test.txt'))
+        self.dictionary.add_word('<pad>')
 
     def tokenize(self, path):
         """Tokenizes a text file."""
@@ -70,19 +71,21 @@ class CorpusSentence(object):
         # Add words to the dictionary
         lengths = []
         with open(path, 'r') as f:
-            tokens = 0
             for line in f:
-                words = ['<bos>'] + line.split() + ['<eos>']
+                # 加bos是基于sentence训练的尝试，但是失败了
+                # words = ['<bos>'] + line.split() + ['<eos>']
+                words = line.split() + ['<eos>']
                 lengths.append(len(words))
                 for word in words:
                     self.dictionary.add_word(word)
-        lengths = lengths.torch.LongTensor(lengths)
+        lengths = torch.LongTensor(lengths)
         # Tokenize file content
         ids = []
         with open(path, 'r') as f:
-            token = 0
             for line in f:
                 cur_line_ids = []
+                # 加bos是基于sentence训练的尝试，但是失败了
+                # words = ['<bos>'] + line.split() + ['<eos>']
                 words = line.split() + ['<eos>']
                 for word in words:
                     cur_line_ids.append(self.dictionary.word2idx[word])
@@ -105,34 +108,83 @@ class DependencyCorpus(CorpusSentence):
         with open(os.path.join(dependency_path, test_filename), "r", encoding="utf-8") as f:
             for line in f:
                 self.test_dependency_head.append(eval(line.strip("\n")))
-        if len(self.train_dataset_dependency) == 0:
+        if len(self.train_dependency_head) == 0:
             raise FileNotFoundError(f"Dataset dependency not found: {dependency_path}")
         
         self.train_dep_token_list = self.build_dependency_token_list(self.train, self.train_lengths, self.train_dependency_head)
         self.valid_dep_token_list = self.build_dependency_token_list(self.valid, self.valid_lengths, self.valid_dependency_head)
         self.test_dep_token_list = self.build_dependency_token_list(self.test, self.test_lengths, self.test_dependency_head)
 
+        self.train_allinone = [self.dictionary.word2idx['<eos>']]
+        for sent_list in self.train:
+            self.train_allinone.extend(sent_list)
+        self.train_allinone = self.train_allinone[:-1] # 这一步使得train_allinone和train_dep_token_allinone直接对齐
+        self.valid_allinone = [self.dictionary.word2idx['<eos>']]
+        for sent_list in self.valid:
+            self.valid_allinone.extend(sent_list)
+        self.valid_allinone = self.valid_allinone[:-1]
+        self.test_allinone = [self.dictionary.word2idx['<eos>']]
+        for sent_list in self.test:
+            self.test_allinone.extend(sent_list)
+        self.test_allinone = self.test_allinone[:-1]
+        self.train_dep_token_allinone = []
+        for dep_tokens_list in self.train_dep_token_list:
+            self.train_dep_token_allinone.extend(dep_tokens_list)
+        self.valid_dep_token_allinone = []
+        for dep_tokens_list in self.valid_dep_token_list:
+            self.valid_dep_token_allinone.extend(dep_tokens_list)
+        self.test_dep_token_allinone = []
+        for dep_tokens_list in self.test_dep_token_list:
+            self.test_dep_token_allinone.extend(dep_tokens_list)
+        
+        assert len(self.train_allinone) == len(self.train_dep_token_allinone)
+        assert len(self.valid_allinone) == len(self.valid_dep_token_allinone)
+        assert len(self.test_allinone) == len(self.test_dep_token_allinone)
+        self.train_allinone = torch.LongTensor(self.train_allinone)
+        self.valid_allinone = torch.LongTensor(self.valid_allinone)
+        self.test_allinone = torch.LongTensor(self.test_allinone)
 
-    def build_dependency_token_list(token_list, len_list, head_list):
+    def build_dependency_token_list(self, token_list, len_list, head_list):
         """
         构造self.train等的dependency token list
         """
         dependency_token_list = []
         for idx in range(len(token_list)):
             cur_dep_token_list = [[] for _ in range(len_list[idx])]
-            source = token_list[idx][:-1]
-            cur_dep_token_list[-1].append(self.dictionary.word2idx('<eos>'))
+            source = [self.dictionary.word2idx['<eos>']] + token_list[idx][:-1]
+         
+            cur_dep_token_list[-1].append(self.dictionary.word2idx['<eos>'])
+            # print(" len of source is : ", len(source))
+            # print(" len of head_list[idx] is : ", len(head_list[idx]))
             for i, head in enumerate(head_list[idx]):
                 cur_idx = i + 1
                 if cur_idx < head:
-                    cur_dep_token_list[cur_idx].append(source[head].item())
+                    cur_dep_token_list[cur_idx].append(source[head])
                 elif cur_idx > head:
-                    cur_dep_token_list[head].append(source[cur_idx].item())
+                    cur_dep_token_list[head].append(source[cur_idx])
                 else:
                     raise ValueError("Improssible! One token's dependency head is itself.")
             dependency_token_list.append(cur_dep_token_list)
             #dependency_token_list只是每个句子的每个位置的于其有dependency关系的token id 的list，之后在batchify中转换成dependency_set_indicator
         return np.array(dependency_token_list)
+
+"""
+尝试过上述sentence级别的训练之后发现，LSTM不能做到像Transformer LM那样Unconditional Text Generation，loss 根本降不下来。
+因此可以在使用head文件得到dependency token list之后，整合到一个list中，依然进行原来那样language modeling的训练
+"""
+
+class SentenceDataset(Dataset):
+    def __init__(self, sentence_data, data_lengths, dictionary):
+        self.sorted_lengths, self.sorted_idx = data_lengths.sort(0, descending=True)
+        self.sentence_data = sentence_data[self.sorted_idx]
+        self.dictionary = dictionary
+    def __len__(self):
+        return len(self.sentence_data)
+    def __getitem__(self, index):
+        source = torch.LongTensor(self.sentence_data[index][:-1])
+        target = torch.LongTensor(self.sentence_data[index][1:])
+        
+        return {"id": index, "source": source, "target": target}
 
 class SentenceWithDependencyDataset(Dataset):
     def __init__(self, sentence_data, data_lengths, dependency_token_data, dictionary):
