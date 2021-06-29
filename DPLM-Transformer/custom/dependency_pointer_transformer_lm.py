@@ -189,7 +189,7 @@ class DPTransformerLanguageModelConfig(FairseqDataclass):
 
     # for dependency pointer
     data_path_for_load_model: str = field(
-        default="/home/yangzhixian/DependencyGuided/DG/data/news/data-bin",
+        default="/home/yangzhixian/DependencyGuided/data/news/data-bin",
         metadata={
             "help": "path to data"
         },
@@ -213,7 +213,7 @@ class DPTransformerLanguageModelConfig(FairseqDataclass):
         },
     )
     force_generation: float = field(
-        default=-1,
+        default=0,
         metadata={
             "help": 'set the vocabulary distribution weight to P, '
                     'instead of predicting it from the input (1.0 '
@@ -221,7 +221,7 @@ class DPTransformerLanguageModelConfig(FairseqDataclass):
         },
     )
     freeze_dependency_decoder: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": 'if freeze the dependency decoder while training DPTransformerLM'
         },
@@ -394,19 +394,30 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
             if incremental_state is not None: #means that we are in generating phase
                 prev_output_tokens = prev_output_tokens[:, -1:]
                 dep_x_cur = dep_x_all_output[:, -1:, :]
+                dep_attn: Optional[Tensor] = dep_extra["attn"][0][:, -1:, :]
+                # tok_attn: Optional[Tensor] = tok_extra["attn"][0][:, -1:, :]
             else:
                 dep_x_cur = dep_x_all_output
-
+                dep_attn: Optional[Tensor] = dep_extra["attn"][0]
+                # tok_attn: Optional[Tensor] = tok_extra["attn"][0]
+            # print("dep_x_cur is size : ", dep_x_cur.size())
             prev_output_embed = self.embed_tokens(prev_output_tokens)
             prev_output_embed *= self.embed_scale
-        
+           
+            assert dep_attn.shape[2] == dep_x_all_output.shape[1]
+            # assert tok_attn.shape[2] == dep_x_all_output.shape[1]
+            # dep_context_state = torch.bmm(dep_attn, dep_x_all_output)
+            # predictors = torch.cat((prev_output_embed, tok_x, dep_context_state), 2)
+            """
+            transformer 结构中的self-attn在decoder的t时刻的hidden state dep_x_cur，本身就包含着对于之前所有attn向量和其v值的加权求和
+            """
             predictors = torch.cat((prev_output_embed, tok_x, dep_x_cur), 2)
             p_gens = self.project_p_gens(predictors)
             p_gens = torch.sigmoid(p_gens)
-            dep_attn: Optional[Tensor] = dep_extra["attn"][0]
-            
             assert dep_attn is not None
             tok_x = self.output_layer(tok_x, dep_x_all_output, dep_attn, p_gens)
+            # assert tok_attn is not None
+            # tok_x = self.output_layer(tok_x, dep_x_all_output, tok_attn, p_gens)
         return tok_x, tok_extra
 
     def output_layer(
@@ -420,9 +431,9 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         """
         Project dependency attention features to the weight of dependency probabilities
         """
-        if self.force_p_gen > 0:
+        if self.force_p_gen >= 0:
             p_gens = self.force_p_gen
-
+        # print("p_gens is : ", p_gens)
         if self.adaptive_softmax is None:
             next_token_logits = self.output_projection(tok_features)
         else:
@@ -443,10 +454,12 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
             (next_token_logits, None), log_probs=False, sample=None
         )
         gen_dists = torch.mul(gen_dists, p_gens)
-        # print("dep_attn size is : ", dep_attn.size())
-        # print("dep_token_logits size is : ", dep_token_logits.size())
+        # print("gen_dists size is : ", gen_dists.size())
         assert dep_attn.shape[2] == dep_token_logits.shape[1]
+        # print("torch.sum(dep_attn, -1) is : ", torch.sum(dep_attn, -1))
         weighted_sum_dep_dists = torch.bmm(dep_attn, dep_token_logits)
+        # print("dep_token_logits size is : ", dep_token_logits.size())
+        # print("weighted_sum_dep_dists size is : ", weighted_sum_dep_dists.size())
         weighted_sum_dep_dists = torch.mul(weighted_sum_dep_dists, 1 - p_gens)
 
         return gen_dists + weighted_sum_dep_dists
@@ -529,15 +542,15 @@ def base_lm_architecture(args):
     args.offload_activations = getattr(args, "offload_activations", False)
     if args.offload_activations:
         args.checkpoint_activations = True
-    args.data_path_for_load_model = getattr(args, "data_path_for_load_model", "/home/yangzhixian/DependencyGuided/DG/data/news/data-bin")
+    args.data_path_for_load_model = getattr(args, "data_path_for_load_model", "/home/yangzhixian/DependencyGuided/data/news/data-bin")
     args.alignment_heads = getattr(args, "alignment_heads", 1)
     args.alignment_layer = getattr(args, "alignment_layer", -1)
     if args.alignment_layer < 0:
         args.alignment_layer = args.decoder_layers + args.alignment_layer
     args.dependency_model_path = getattr(args, "dependency_model_path", "/home/yangzhixian/DependencyGuided/DG/checkpoints/news/dependency_predictor")
     args.dependency_model_filename = getattr(args, "dependency_model_filename", "checkpoint_best.pt")
-    args.force_generation = getattr(args, "force_generation", -1)
-    args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", True)
+    args.force_generation = getattr(args, "force_generation", 0)
+    args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", False)
     
 
 @register_model_architecture("dependency_pointer_transformer_lm", "dependency_pointer_transformer_lm_big")

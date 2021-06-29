@@ -33,7 +33,7 @@ SHORTEN_METHOD_CHOICES = ChoiceEnum(["none", "truncate", "random_crop"])
 logger = logging.getLogger(__name__)
 
 @dataclass
-class DependencyModelingConfig(FairseqDataclass):
+class LanguageModelingConfig(FairseqDataclass):
     data: Optional[str] = field(
         default=None, metadata={"help": "path to data directory"}
     )
@@ -88,9 +88,8 @@ class DependencyModelingConfig(FairseqDataclass):
     use_plasma_view: bool = II("common.use_plasma_view")
     plasma_path: str = II("common.plasma_path")
 
-    
     dependency: str = field(
-        default="/home/yangzhixian/DependencyGuided/DG/data/news/dependency",
+        default="/home/yangzhixian/DependencyGuided/data/news/dependency",
         metadata={
             "help": "path to data dependency"
         },
@@ -102,7 +101,7 @@ class DependencyModelingConfig(FairseqDataclass):
         },
     )
 
-@register_task("dependency_modeling", dataclass=DependencyModelingConfig)
+@register_task("dependency_modeling", dataclass=LanguageModelingConfig)
 class DependencyModelingTask(LegacyFairseqTask):
     """
     Train a DependencyDecoder
@@ -200,16 +199,18 @@ class DependencyModelingTask(LegacyFairseqTask):
             self.args.tokens_per_sample,
             self.args.seed,
         )
-
+    
         dataset = SentenceWithDependencyDataset(
             dataset,
             dataset.sizes,
             dataset_dependency,
             pad=self.dictionary.pad(),
             eos=self.dictionary.eos(),
+            break_mode=self.args.sample_break_mode,
             use_plasma_view=self.args.use_plasma_view,
             split_path=split_path,
             plasma_path=self.args.plasma_path,
+            block_size=self.args.tokens_per_sample,
         )
 
         add_eos_for_other_targets = (
@@ -224,6 +225,8 @@ class DependencyModelingTask(LegacyFairseqTask):
             tgt_vocab=self.output_dictionary,
             add_eos_for_other_targets=add_eos_for_other_targets,
             shuffle=True,
+            break_mode=self.args.sample_break_mode,
+            block_size=self.args.tokens_per_sample,
         )
         
     def build_dataset_for_inference(self, src_tokens, src_lengths, **kwargs):
