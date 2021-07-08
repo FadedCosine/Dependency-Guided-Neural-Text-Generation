@@ -78,11 +78,3 @@ class RNNModel(nn.Module):
 
     def init_hidden(self, bsz):
         return self.rnn.init_hidden(bsz)
-
-class DPRNNModel(nn.Module):
-
-    def __init__(self, tok_rnn, dep_rnn, force_generation):
-        super(DPRNNModel, self).__init__()
-        self.tok_rnn = tok_rnn
-        self.dep_rnn = dep_rnn
-        self.force_generation = force_generation

@@ -50,6 +50,7 @@ def evaluate(args, data_source, model, corpus, criterion, batch_size=10):
         # input = batch['net_input']['src_tokens'].to(args.device).t()
         # targets = batch['target'].to(args.device).t()
         input, targets = get_batch(data_source, i, args, evaluation=True)
+        # print("targets is : ", [ corpus.dictionary.idx2word[id] for id in targets])
         output, hidden = model(input, hidden)
         total_loss += len(input) * criterion(model.decoder.weight, model.decoder.bias, output, targets).data
         hidden = repackage_hidden(hidden)
@@ -84,6 +85,8 @@ def train_a_epoch(args, train_dataset, model, corpus, optimizer, criterion, para
         optimizer.zero_grad()
         # logger.info("input size is : {}".format(input.size()))
         output, hidden, rnn_hs, dropped_rnn_hs = model(input, hidden, return_h=True)
+        #rnn_hs is [layer_size, lengths, batch_size, hidden_state_size]
+       
         # output, hidden = model(data, hidden, return_h=False)
         raw_loss = criterion(model.decoder.weight, model.decoder.bias, output, targets)
         loss = raw_loss
@@ -167,8 +170,10 @@ def get_args():
                         help='random seed')
     parser.add_argument('--nonmono', type=int, default=5,
                         help='random seed')
-    parser.add_argument('--cuda', action='store_false',
+    parser.add_argument('--cuda', action='store_true',
                         help='use CUDA')
+    parser.add_argument('--do_eval', action='store_true',
+                        help='do evaluate')
     parser.add_argument('--log-interval', type=int, default=50, metavar='N',
                         help='report interval')
     randomhash = ''.join(str(time.time()).split('.'))
@@ -182,6 +187,8 @@ def get_args():
                         help='weight decay applied to all weights')
     parser.add_argument('--resume', type=str, default='',
                         help='path of model to resume')
+    parser.add_argument('--trained_epoches', type=int, default=0,
+                        help='have trained epoches')
     parser.add_argument('--optimizer', type=str, default='sgd',
                         help='optimizer to use (sgd, adam)')
     parser.add_argument('--when', nargs="+", type=int, default=[-1],
@@ -309,116 +316,119 @@ def main():
     logger.info('Args: {}'.format(args))
     logger.info('Model total parameters: {}'.format(total_params))
 
-    # Loop over epochs.
-    lr = args.lr
-    best_val_loss = []
-    stored_loss = 100000000
+    
 
     # At any point you can hit Ctrl + C to break out of training early.
-    try:
-        optimizer = None
-        # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
-        if args.optimizer == 'sgd':
-            optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
-        if args.optimizer == 'adam':
-            optimizer = torch.optim.Adam(params, lr=args.lr, betas=(0, 0.999), eps=1e-9, weight_decay=args.wdecay)
-            scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.5, patience=2, threshold=0)
-        # Train!
-    
-        for epoch in range(1, args.epochs + 1):
-            epoch_start_time = time.time()
-            train_a_epoch(args, train_data, model, corpus, optimizer, criterion, params, epoch)
-            if 't0' in optimizer.param_groups[0]:
-                tmp = {}
-                for prm in model.parameters():
-                    tmp[prm] = prm.data.clone()
-                    prm.data = optimizer.state[prm]['ax'].clone()
+    if not args.do_eval:
+        # Loop over epochs.
+        lr = args.lr
+        best_val_loss = []
+        stored_loss = 100000000
+        try:
+            optimizer = None
+            # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
+            if args.optimizer == 'sgd':
+                optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
+            if args.optimizer == 'adam':
+                optimizer = torch.optim.Adam(params, lr=args.lr, betas=(0, 0.999), eps=1e-9, weight_decay=args.wdecay)
+                scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.5, patience=2, threshold=0)
+            # Train!
+        
+            for epoch in range(args.trained_epoches + 1, args.epochs + 1):
+                epoch_start_time = time.time()
+                train_a_epoch(args, train_data, model, corpus, optimizer, criterion, params, epoch)
+                if 't0' in optimizer.param_groups[0]:
+                    tmp = {}
+                    for prm in model.parameters():
+                        tmp[prm] = prm.data.clone()
+                        prm.data = optimizer.state[prm]['ax'].clone()
 
-                val_loss2 = evaluate(args, val_data, model, corpus, criterion, eval_batch_size)
-                logger.info('-' * 89)
-                try:
-                    logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                        'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
-                        epoch, (time.time() - epoch_start_time), val_loss2, math.exp(val_loss2), val_loss2 / math.log(2)))
-                except OverflowError:
-                    logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                        'valid ppl inf | valid bpc {:8.3f}'.format(
-                        epoch, (time.time() - epoch_start_time), val_loss2, val_loss2 / math.log(2)))
-                logger.info('-' * 89)
+                    val_loss2 = evaluate(args, val_data, model, corpus, criterion, eval_batch_size)
+                    logger.info('-' * 89)
+                    try:
+                        logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+                            'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
+                            epoch, (time.time() - epoch_start_time), val_loss2, math.exp(val_loss2), val_loss2 / math.log(2)))
+                    except OverflowError:
+                        logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+                            'valid ppl inf | valid bpc {:8.3f}'.format(
+                            epoch, (time.time() - epoch_start_time), val_loss2, val_loss2 / math.log(2)))
+                    logger.info('-' * 89)
 
-                if val_loss2 < stored_loss:
-                    model_save(args, args.save, model, criterion, optimizer)
-                    logger.info('Saving Averaged!')
-                    stored_loss = val_loss2
+                    if val_loss2 < stored_loss:
+                        model_save(args, args.save, model, criterion, optimizer)
+                        logger.info('Saving Averaged!')
+                        stored_loss = val_loss2
 
-                for prm in model.parameters():
-                    prm.data = tmp[prm].clone()
+                    for prm in model.parameters():
+                        prm.data = tmp[prm].clone()
 
-                if epoch == args.finetuning:
-                    logger.info('Switching to finetuning')
-                    optimizer = torch.optim.ASGD(model.parameters(), lr=args.lr, t0=0, lambd=0., weight_decay=args.wdecay)
-                    best_val_loss = []
+                    if epoch == args.finetuning:
+                        logger.info('Switching to finetuning')
+                        optimizer = torch.optim.ASGD(model.parameters(), lr=args.lr, t0=0, lambd=0., weight_decay=args.wdecay)
+                        best_val_loss = []
 
-                if epoch > args.finetuning and len(best_val_loss) > args.nonmono and val_loss2 > min(
-                        best_val_loss[:-args.nonmono]):
-                    logger.info('Done!')
-                    import sys
+                    if epoch > args.finetuning and len(best_val_loss) > args.nonmono and val_loss2 > min(
+                            best_val_loss[:-args.nonmono]):
+                        logger.info('Done!')
+                        import sys
 
-                    sys.exit(1)
+                        sys.exit(1)
 
-            else:
-                val_loss = evaluate(args, val_data, model, corpus, criterion, eval_batch_size)
-                logger.info('-' * 89)
-                try:
-                    logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                        'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
-                        epoch, (time.time() - epoch_start_time), val_loss, math.exp(val_loss), val_loss / math.log(2)))
-                except OverflowError:
-                    logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                        'valid ppl Inf | valid bpc {:8.3f}'.format(
-                        epoch, (time.time() - epoch_start_time), val_loss, val_loss / math.log(2)))
-                logger.info('-' * 89)
+                else:
+                    val_loss = evaluate(args, val_data, model, corpus, criterion, eval_batch_size)
+                    logger.info('-' * 89)
+                    try:
+                        logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+                            'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
+                            epoch, (time.time() - epoch_start_time), val_loss, math.exp(val_loss), val_loss / math.log(2)))
+                    except OverflowError:
+                        logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+                            'valid ppl Inf | valid bpc {:8.3f}'.format(
+                            epoch, (time.time() - epoch_start_time), val_loss, val_loss / math.log(2)))
+                    logger.info('-' * 89)
 
-                if val_loss < stored_loss:
-                    model_save(args, args.save, model, criterion, optimizer)
-                    logger.info('Saving model (new best validation)')
-                    stored_loss = val_loss
+                    if val_loss < stored_loss:
+                        model_save(args, args.save, model, criterion, optimizer)
+                        logger.info('Saving model (new best validation)')
+                        stored_loss = val_loss
 
-                if args.optimizer == 'adam':
-                    scheduler.step(val_loss)
+                    if args.optimizer == 'adam':
+                        scheduler.step(val_loss)
 
-                if args.optimizer == 'sgd' and 't0' not in optimizer.param_groups[0] and (
-                        len(best_val_loss) > args.nonmono and val_loss > min(best_val_loss[:-args.nonmono])):
-                    logger.info('Switching to ASGD')
-                    optimizer = torch.optim.ASGD(model.parameters(), lr=args.lr, t0=0, lambd=0., weight_decay=args.wdecay)
+                    if args.optimizer == 'sgd' and 't0' not in optimizer.param_groups[0] and (
+                            len(best_val_loss) > args.nonmono and val_loss > min(best_val_loss[:-args.nonmono])):
+                        logger.info('Switching to ASGD')
+                        optimizer = torch.optim.ASGD(model.parameters(), lr=args.lr, t0=0, lambd=0., weight_decay=args.wdecay)
 
-                if epoch in args.when:
-                    logger.info('Saving model before learning rate decreased')
-                    model_save(args, '{}.e{}'.format(args.save, epoch), model, criterion, optimizer)
-                    logger.info('Dividing learning rate by 10')
-                    optimizer.param_groups[0]['lr'] /= 10.
+                    if epoch in args.when:
+                        logger.info('Saving model before learning rate decreased')
+                        model_save(args, '{}.e{}'.format(args.save, epoch), model, criterion, optimizer)
+                        logger.info('Dividing learning rate by 10')
+                        optimizer.param_groups[0]['lr'] /= 10.
 
-                best_val_loss.append(val_loss)
+                    best_val_loss.append(val_loss)
 
-            logger.info("PROGRESS: {}%".format((epoch / args.epochs) * 100))
+                logger.info("PROGRESS: {}%".format((epoch / args.epochs) * 100))
 
-    except KeyboardInterrupt:
-        logger.info('-' * 89)
-        logger.info('Exiting from training early')
+        except KeyboardInterrupt:
+            logger.info('-' * 89)
+            logger.info('Exiting from training early')
+    else:
+        logger.info('| Begin of testing |')
+        # Load the best saved model.
+        model, criterion, optimizer = model_load(args, args.save)
 
-    # Load the best saved model.
-    model_load(args, args.save)
-
-    # Run on test data.
-    test_loss =  evaluate(args, test_data, model, corpus, criterion, test_batch_size)
-    logger.info('=' * 89)
-    try:
-        logger.info('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-            test_loss, math.exp(test_loss), test_loss / math.log(2)))
-    except OverflowError:
-        logger.info('| End of training | test loss {:5.2f} | test ppl Inf | test bpc {:8.3f}'.format(
-            test_loss, test_loss / math.log(2)))
-    logger.info('=' * 89)
+        # Run on test data.
+        test_loss =  evaluate(args, test_data, model, corpus, criterion, test_batch_size)
+        logger.info('=' * 89)
+        try:
+            logger.info('| End of testing | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+                test_loss, math.exp(test_loss), test_loss / math.log(2)))
+        except OverflowError:
+            logger.info('| End of testing | test loss {:5.2f} | test ppl Inf | test bpc {:8.3f}'.format(
+                test_loss, test_loss / math.log(2)))
+        logger.info('=' * 89)
 
 if __name__ == '__main__':
     main()
