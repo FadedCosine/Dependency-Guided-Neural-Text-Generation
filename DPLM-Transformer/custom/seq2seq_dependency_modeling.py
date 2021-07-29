@@ -216,7 +216,7 @@ class S2SDpendencyModelingConfig(FairseqDataclass):
     required_seq_len_multiple: int = II("dataset.required_seq_len_multiple")
 
     dependency: str = field(
-        default="/home/yangzhixian/DependencyGuided/DPSeq2Seq/data/iwslt14de-en/dependency",
+        default="/home/yangzhixian/DependencyGuided/data/iwslt14de-en/dependency",
         metadata={
             "help": "path to data dependency"
         },
