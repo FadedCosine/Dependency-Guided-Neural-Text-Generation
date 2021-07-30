@@ -114,11 +114,14 @@ class DependencyCorpus(CorpusSentence):
         self.train_dep_token_list = self.build_dependency_token_list(self.train, self.train_lengths, self.train_dependency_head)
         self.valid_dep_token_list = self.build_dependency_token_list(self.valid, self.valid_lengths, self.valid_dependency_head)
         self.test_dep_token_list = self.build_dependency_token_list(self.test, self.test_lengths, self.test_dependency_head)
-
+        # self.train_dep_indicators_allinone = self.build_dependency_indicators(self.train, self.train_lengths, self.train_dependency_head)
+        # self.valid_dep_indicators_allinone = self.build_dependency_indicators(self.valid, self.valid_lengths, self.valid_dependency_head)
+        # self.test_dep_indicators_allinone = self.build_dependency_indicators(self.test, self.test_lengths, self.test_dependency_head)
+        # dependency_token_list: [  [ [cur_position_dependency_token1, cur_position_dependency_token2, ... ] * seqlen1  ] * lines ]
         self.train_allinone = [self.dictionary.word2idx['<eos>']]
         for sent_list in self.train:
             self.train_allinone.extend(sent_list)
-        self.train_allinone = self.train_allinone[:-1] # 这一步使得train_allinone和train_dep_token_allinone直接对齐
+        self.train_allinone = self.train_allinone[:-1] # 在首部加上一个eos，删除尾部的eos，这一步使得train_allinone和train_dep_token_allinone直接对齐
         self.valid_allinone = [self.dictionary.word2idx['<eos>']]
         for sent_list in self.valid:
             self.valid_allinone.extend(sent_list)
@@ -127,32 +130,34 @@ class DependencyCorpus(CorpusSentence):
         for sent_list in self.test:
             self.test_allinone.extend(sent_list)
         self.test_allinone = self.test_allinone[:-1]
-        self.train_dep_token_allinone = []
-        for dep_tokens_list in self.train_dep_token_list:
-            self.train_dep_token_allinone.extend(dep_tokens_list)
-        self.valid_dep_token_allinone = []
-        for dep_tokens_list in self.valid_dep_token_list:
-            self.valid_dep_token_allinone.extend(dep_tokens_list)
-        self.test_dep_token_allinone = []
-        for dep_tokens_list in self.test_dep_token_list:
-            self.test_dep_token_allinone.extend(dep_tokens_list)
+
+        # self.train_dep_tokens_lists = []
+        # for dep_tokens_list in self.train_dep_token_list:
+        #     self.train_dep_tokens_lists.extend(dep_tokens_list)
+        # self.valid_dep_tokens_lists = []
+        # for dep_tokens_list in self.valid_dep_token_list:
+        #     self.valid_dep_tokens_lists.extend(dep_tokens_list)
+        # self.test_dep_tokens_lists = []
+        # for dep_tokens_list in self.test_dep_token_list:
+        #     self.test_dep_tokens_lists.extend(dep_tokens_list)
         
-        assert len(self.train_allinone) == len(self.train_dep_token_allinone)
-        assert len(self.valid_allinone) == len(self.valid_dep_token_allinone)
-        assert len(self.test_allinone) == len(self.test_dep_token_allinone)
+        assert len(self.train_allinone) == len(self.train_dep_token_list)
+        assert len(self.valid_allinone) == len(self.valid_dep_token_list)
+        assert len(self.test_allinone) == len(self.test_dep_token_list)
         self.train_allinone = torch.LongTensor(self.train_allinone)
         self.valid_allinone = torch.LongTensor(self.valid_allinone)
         self.test_allinone = torch.LongTensor(self.test_allinone)
-
-    def build_dependency_token_list(self, token_list, len_list, head_list):
-        """
-        构造self.train等的dependency token list
-        """
-        dependency_token_list = []
+        # self.train_dep_indicators_allinone = torch.LongTensor(self.train_dep_indicators_allinone)
+        # self.valid_dep_indicators_allinone = torch.LongTensor(self.valid_dep_indicators_allinone)
+        # self.test_dep_indicators_allinone = torch.LongTensor(self.test_dep_indicators_allinone)
+        
+    def build_dependency_indicators(self, token_list, len_list, head_list):
+        total_len = sum(len_list)
+        dependency_indicators = torch.zeros((total_len, len(self.dictionary)))
+        gloab_idx = 0
         for idx in range(len(token_list)):
             cur_dep_token_list = [[] for _ in range(len_list[idx])]
             source = [self.dictionary.word2idx['<eos>']] + token_list[idx][:-1]
-         
             cur_dep_token_list[-1].append(self.dictionary.word2idx['<eos>'])
             # print(" len of source is : ", len(source))
             # print(" len of head_list[idx] is : ", len(head_list[idx]))
@@ -164,7 +169,31 @@ class DependencyCorpus(CorpusSentence):
                     cur_dep_token_list[head].append(source[cur_idx])
                 else:
                     raise ValueError("Improssible! One token's dependency head is itself.")
-            dependency_token_list.append(cur_dep_token_list)
+            for line_idx, dep_set in enumerate(dep_tokens_list):
+                dependency_indicators[gloab_idx+line_idx, dep_set] = 1
+            gloab_idx += len_list[idx]  
+        return dependency_indicators
+    def build_dependency_token_list(self, token_list, len_list, head_list):
+        """
+        构造self.train等的dependency token list
+        """
+        dependency_token_list = []
+        for idx in range(len(token_list)):
+            cur_dep_token_list = [set() for _ in range(len_list[idx])]
+            source = [self.dictionary.word2idx['<eos>']] + token_list[idx][:-1]
+         
+            cur_dep_token_list[-1].add(self.dictionary.word2idx['<eos>'])
+            # print(" len of source is : ", len(source))
+            # print(" len of head_list[idx] is : ", len(head_list[idx]))
+            for i, head in enumerate(head_list[idx]):
+                cur_idx = i + 1
+                if cur_idx < head:
+                    cur_dep_token_list[cur_idx].add(source[head])
+                elif cur_idx > head:
+                    cur_dep_token_list[head].add(source[cur_idx])
+                else:
+                    raise ValueError("Improssible! One token's dependency head is itself.")
+            dependency_token_list.extend(cur_dep_token_list)
             #dependency_token_list只是每个句子的每个位置的于其有dependency关系的token id 的list，之后在batchify中转换成dependency_set_indicator
         return np.array(dependency_token_list)
 

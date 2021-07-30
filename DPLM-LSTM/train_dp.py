@@ -9,8 +9,10 @@ import torch.optim.lr_scheduler as lr_scheduler
 from functools import partial
 import data
 from model import RNNModel
+from dependency_pointer_model import DPRNNModel
 from tqdm import tqdm
-from utils import batchify, batchify_dep_tokenlist, get_batch, repackage_hidden, collate_func_for_tok
+from utils import batchify, batchify_dep_tokenlist, get_batch, get_dep_batch, repackage_hidden, collate_func_for_tok, batchify_dep_indicators
+from dependency_modeling_criterion import DependencyCrossEntropy
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 import os
@@ -19,8 +21,8 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
+from splitcross import SplitCrossEntropyLoss
+split_cross_criterion = SplitCrossEntropyLoss(400, splits=[], verbose=False)
 def model_save(args, fn, model, criterion, optimizer):
     if args.philly:
         fn = os.path.join(os.environ['PT_OUTPUT_DIR'], fn)
@@ -39,7 +41,7 @@ def model_load(args, fn):
 # Training code
 ###############################################################################
 
-def evaluate(args, data_source, model, corpus, criterion, batch_size=10):
+def evaluate(args, data_source, data_dependency, model, corpus, criterion, batch_size=10):
     # Turn on evaluation mode which disables dropout.
     model.eval()
     if args.model == 'QRNN': model.reset()
@@ -49,16 +51,24 @@ def evaluate(args, data_source, model, corpus, criterion, batch_size=10):
     for i in range(0, data_source.size(0) - 1, args.bptt):
         # input = batch['net_input']['src_tokens'].to(args.device).t()
         # targets = batch['target'].to(args.device).t()
-        input, targets = get_batch(data_source, i, args)
+        
         # print("targets is : ", [ corpus.dictionary.idx2word[id] for id in targets])
-        output, hidden = model(input, hidden)
-        total_loss += len(input) * criterion(model.decoder.weight, model.decoder.bias, output, targets).data
+        if args.is_train_dependency:
+            input, targets = get_dep_batch(data_source, data_dependency, i, args)
+            output, hidden = model(input, hidden)
+        else:
+            input, targets = get_batch(data_source, i, args)
+            dep_logits, attn_weight, hidden = model(input, hidden,context_length=args.context_length)
+            dep_logits = dep_logits.transpose(0,1)
+            output = torch.bmm(attn_weight, dep_logits).transpose(0,1)
+        output = output.contiguous().view(-1, ntokens)
+        total_loss += len(input) * criterion(output, targets).data
         hidden = repackage_hidden(hidden)
 
     return total_loss.item() / len(data_source)
 
 
-def train_a_epoch(args, train_dataset, model, corpus, optimizer, criterion, params, epoch):
+def train_a_epoch(args, train_dataset, train_dependency, model, corpus, optimizer, criterion, params, epoch):
     # Turn on training mode which enables dropout.
     if args.model == 'QRNN': model.reset()
     total_loss = 0
@@ -70,26 +80,37 @@ def train_a_epoch(args, train_dataset, model, corpus, optimizer, criterion, para
     #     # input_lengths = batch['net_input']['src_lengths'].to(args.device)
     #     targets = batch['target'].to(args.device).t()
     batch_idx, i = 0, 0
-    while i < train_dataset.size(0) - 1 - 1:
+    while i < len(train_dataset) - 1 - 1:
         bptt = args.bptt if np.random.random() < 0.95 else args.bptt / 2.
         # Prevent excessively small or negative sequence lengths
         seq_len = max(5, int(np.random.normal(bptt, 5)))
         lr2 = optimizer.param_groups[0]['lr']
         optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt
         model.train()
-        input, targets = get_batch(train_dataset, i, args, seq_len=seq_len)
-        model.train()
+        
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         hidden = repackage_hidden(hidden)
         optimizer.zero_grad()
-        logger.info("input size is : {}".format(input.size()))
-        output, hidden, rnn_hs, dropped_rnn_hs = model(input, hidden, return_h=True)
-        #rnn_hs is [layer_size, lengths, batch_size, hidden_state_size]
-        print("output size is : ", output.size())
-        # output, hidden = model(data, hidden, return_h=False)
-        raw_loss = criterion(model.decoder.weight, model.decoder.bias, output, targets)
-        print("raw_loss is : ", raw_loss)
+        if args.is_train_dependency:
+            input, targets = get_dep_batch(train_dataset, train_dependency, i, args, seq_len=seq_len)
+            output, hidden, rnn_hs, dropped_rnn_hs = model(input, hidden, return_h=True)
+        else:
+            input, targets = get_batch(train_dataset, i, args, seq_len=seq_len)
+            dep_logits, attn_weight, hidden, rnn_hs, dropped_rnn_hs = model(input, hidden, return_h=True, context_length=args.context_length)
+            # rnn_hs is [layer_size, lengths, batch_size, hidden_state_size]
+            # dep_logits is [seq_len, batch_size, ntokens]
+            # attn_weight is [b, s, s]
+            dep_logits = dep_logits.transpose(0,1)
+            # dep_logits is [batch_size, seq_len, ntokens]
+            output = torch.bmm(attn_weight, dep_logits).transpose(0,1)
+        output = output.contiguous().view(-1, ntokens)
+        # dep_logits = dep_logits.transpose(0,1).contiguous().view(-1, ntokens)
+        # split_cross_loss = split_cross_criterion(model.decoder.weight, model.decoder.bias, result, targets)
+        raw_loss = criterion(output, targets)
+        # print("output size is : ", output.size())
+        # print("cross entropy loss is : ", raw_loss)
+        # print("split_cross_loss loss is : ", split_cross_loss)
         loss = raw_loss
         # Activiation Regularization
         if args.alpha:
@@ -108,7 +129,7 @@ def train_a_epoch(args, train_dataset, model, corpus, optimizer, criterion, para
         if args.clip: torch.nn.utils.clip_grad_norm_(params, args.clip)
         optimizer.step()
 
-        total_loss += raw_loss.data
+        total_loss += (raw_loss.data)
         optimizer.param_groups[0]['lr'] = lr2
         if batch_idx % args.log_interval == 0 and batch_idx > 0:
             cur_loss = total_loss.item() / args.log_interval
@@ -175,6 +196,10 @@ def get_args():
                         help='use CUDA')
     parser.add_argument('--do_eval', action='store_true',
                         help='do evaluate')
+    parser.add_argument('--is_train_dependency', action='store_true',
+                        help='if is training dependency decoder')
+    parser.add_argument('--context_length', type=int, default=36,
+                    help='context to conduct dependency pointer network')  
     parser.add_argument('--log-interval', type=int, default=50, metavar='N',
                         help='report interval')
     randomhash = ''.join(str(time.time()).split('.'))
@@ -269,17 +294,29 @@ def main():
     eval_batch_size = 10
     test_batch_size = 1
     train_data = batchify(corpus.train_allinone, args.train_batch_size, args)
+    train_dependency = batchify_dep_tokenlist(corpus.train_dep_token_list, args.train_batch_size, args)
+    
+    examp_input = corpus.train_allinone[:24]
+    examp_targets = corpus.train_dep_token_list[:24]
+    # print("example input is : ", [corpus.dictionary.idx2word[item] for item in examp_input])
+    # for item, targets_set in zip(examp_input, examp_targets):
+    #     print("cur token is : ", corpus.dictionary.idx2word[item])
+    #     print("targets_set is : ", targets_set)
+    #     print("dependency tokens is : ", [corpus.dictionary.idx2word[item] for item in list(targets_set)])
+    
     val_data = batchify(corpus.valid_allinone, eval_batch_size, args)
+    val_dependency = batchify_dep_tokenlist(corpus.valid_dep_token_list, eval_batch_size, args)
     test_data = batchify(corpus.test_allinone, test_batch_size, args)
-
-
-
-    from splitcross import SplitCrossEntropyLoss
-    criterion = None
+    test_dependency = batchify_dep_tokenlist(corpus.test_dep_token_list, test_batch_size, args)
+    
+    if args.is_train_dependency:
+        criterion = DependencyCrossEntropy()
+    else:
+        criterion = nn.CrossEntropyLoss()
     ntokens = len(corpus.dictionary)
         
-    model = RNNModel(args.model, ntokens, args.emsize, args.nhid, args.chunk_size, args.nlayers,
-                        args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
+    model = DPRNNModel(args.model, ntokens, args.emsize, args.nhid, args.chunk_size, args.nlayers,
+                        args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied, args.is_train_dependency)
 
     ###############################################################################
     # Build the model
@@ -287,37 +324,26 @@ def main():
     ###
     if args.resume:
         logger.info('Resuming model ...')
-        model, criterion, optimizer = model_load(args, args.resume)
+        model, _, optimizer = model_load(args, args.resume)
         optimizer.param_groups[0]['lr'] = args.lr
         model.dropouti, model.dropouth, model.dropout, args.dropoute = args.dropouti, args.dropouth, args.dropout, args.dropoute
         if args.wdrop:
             for rnn in model.rnn.cells:
                 rnn.hh.dropout = args.wdrop
+        if args.is_train_dependency:
+            model.is_train_dependency = True
+        else:
+            model.is_train_dependency = False
     ###
-    if not criterion:
-        splits = []
-        if ntokens > 500000:
-            # One Billion
-            # This produces fairly even matrix mults for the buckets:
-            # 0: 11723136, 1: 10854630, 2: 11270961, 3: 11219422
-            splits = [4200, 35000, 180000]
-        elif ntokens > 75000:
-            # WikiText-103
-            splits = [2800, 20000, 76000]
-        logger.info('Using {}'.format(splits))
-        criterion = SplitCrossEntropyLoss(args.emsize, splits=splits, verbose=False)
-    ###
+   
     if args.cuda:
         model = model.to(args.device)
-        criterion = criterion.to(args.device)
 
     ###
-    params = list(model.parameters()) + list(criterion.parameters())
+    params = list(model.parameters())
     total_params = sum(x.size()[0] * x.size()[1] if len(x.size()) > 1 else x.size()[0] for x in params if x.size())
     logger.info('Args: {}'.format(args))
     logger.info('Model total parameters: {}'.format(total_params))
-
-    
 
     # At any point you can hit Ctrl + C to break out of training early.
     if not args.do_eval:
@@ -337,14 +363,14 @@ def main():
         
             for epoch in range(args.trained_epoches + 1, args.epochs + 1):
                 epoch_start_time = time.time()
-                train_a_epoch(args, train_data, model, corpus, optimizer, criterion, params, epoch)
+                train_a_epoch(args, train_data, train_dependency, model, corpus, optimizer, criterion, params, epoch)
                 if 't0' in optimizer.param_groups[0]:
                     tmp = {}
                     for prm in model.parameters():
                         tmp[prm] = prm.data.clone()
-                        prm.data = optimizer.state[prm]['ax'].clone()
-
-                    val_loss2 = evaluate(args, val_data, model, corpus, criterion, eval_batch_size)
+                        if 'ax' in optimizer.state[prm]:
+                            prm.data = optimizer.state[prm]['ax'].clone()
+                    val_loss2 = evaluate(args, val_data, val_dependency, model, corpus, criterion, eval_batch_size)
                     logger.info('-' * 89)
                     try:
                         logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
@@ -377,7 +403,7 @@ def main():
                         sys.exit(1)
 
                 else:
-                    val_loss = evaluate(args, val_data, model, corpus, criterion, eval_batch_size)
+                    val_loss = evaluate(args, val_data,val_dependency, model, corpus, criterion, eval_batch_size)
                     logger.info('-' * 89)
                     try:
                         logger.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
@@ -421,7 +447,7 @@ def main():
         model, criterion, optimizer = model_load(args, args.save)
 
         # Run on test data.
-        test_loss =  evaluate(args, test_data, model, corpus, criterion, test_batch_size)
+        test_loss =  evaluate(args, test_data, test_dependency, model, corpus, criterion, test_batch_size)
         logger.info('=' * 89)
         try:
             logger.info('| End of testing | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
