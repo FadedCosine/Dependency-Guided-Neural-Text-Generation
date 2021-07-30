@@ -62,14 +62,12 @@ class RNNModel(nn.Module):
             self.encoder, input,
             dropout=self.dropoute if self.training else 0
         )
-
         emb = self.lockdrop(emb, self.dropouti)
 
         raw_output, hidden, raw_outputs, outputs, distances = self.rnn(emb, hidden)
         self.distance = distances
 
         output = self.lockdrop(raw_output, self.dropout)
-
         result = output.view(output.size(0)*output.size(1), output.size(2))
         if return_h:
             return result, hidden, raw_outputs, outputs
