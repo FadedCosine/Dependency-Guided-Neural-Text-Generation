@@ -142,7 +142,7 @@ if args.task == 'unconditional_gen':
                 attention  = torch.bmm(query, raw_output_history.permute(1,2,0))
                 attention = attention / math.sqrt(raw_output.size(-1)) #[1, 1, seq_len]
                 if args.context_length >= 0:
-                    attention[0][0][:-args.context_length]-float('Inf')
+                    attention[0][0][:-args.context_length] = -float('Inf')
                 weight = F.softmax(attention, dim=-1)
                 dep_logit = model.decoder(model.lockdrop(raw_output, model.dropout)).transpose(0,1) # [1(batch), 1(seqlen), ntokens]
                 dep_logits_history = torch.cat((dep_logits_history, dep_logit), dim=1)
@@ -151,6 +151,18 @@ if args.task == 'unconditional_gen':
                 word_idx = torch.multinomial(torch.softmax(word_weights,-1), 1).cpu()[0]
                 input.fill_(word_idx)
                 word = corpus.dictionary.idx2word[word_idx]
+
+                # hidden = model.init_hidden(1)
+                # dep_logits, attn_weight, hidden = model(input, hidden, return_h=False, context_length=args.context_length)
+                # dep_logits = dep_logits.transpose(0,1)
+                # # dep_logits is [batch_size, seq_len, ntokens]
+                # output = torch.bmm(attn_weight, dep_logits).transpose(0,1)
+                # word_weights = output[-1].squeeze().data.div(args.temperature)
+                # word_weights = top_k_top_p_filtering(word_weights, args.topk, args.topp)
+                # word_idx = torch.multinomial(torch.softmax(word_weights,-1), 1).cpu()[0]
+                # input = torch.cat((input,torch.LongTensor([[word_idx]]).to(device)), dim=0)
+                # word = corpus.dictionary.idx2word[word_idx]
+
                 if word == '<eos>':
                     outf.write('\n')
                     eos_num += 1
@@ -200,11 +212,8 @@ elif args.task == "story_gen":
                 if i % args.log_interval == 0:
                     logger.info('| Generated {}/{}'.format(i, total_input_lines_num))
             else:
-                print("input is : ", input)
                 output, hidden = model(input, hidden)
-                print("output size before is : ", output.size())
                 output = output[-1]
-                print("output size after is : ", output.size())
                 word_weights = model.decoder(output).data.div(args.temperature)
                 word_weights = top_k_top_p_filtering(word_weights, args.topk, args.topp)
                 word_idx = torch.multinomial(torch.softmax(word_weights,-1), 1).cpu()[0]
@@ -216,8 +225,8 @@ elif args.task == "story_gen":
                 else:
                     outf.write(word +  ' ')
                 hidden = repackage_hidden(hidden)
-            if i % args.log_interval == 0:
-                logger.info('| Generated {}/{}'.format(i, total_input_lines_num))
+        if i % args.log_interval == 0:
+            logger.info('| Generated {}/{}'.format(i, total_input_lines_num))
 
 else:
     raise ValueError("The task must be unconditional_gen or story_gen")
