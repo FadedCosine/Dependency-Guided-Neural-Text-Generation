@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim.lr_scheduler as lr_scheduler
 from functools import partial
 import data
-from ONLSTM_model import ONRNNModel
+from ONLSTM_model import ONLSTMModel
 from AWDLSTM_model import RNNModel
 from tqdm import tqdm
 from utils import batchify, batchify_dep_tokenlist, get_batch, repackage_hidden, collate_func_for_tok
@@ -280,10 +280,10 @@ def main():
     ntokens = len(corpus.dictionary)
     
     if args.model == "ONLSTM":
-        model = ONRNNModel(args.rnnmodel, ntokens, args.emsize, args.nhid, args.chunk_size, args.nlayers,
+        model = ONLSTMModel(args.rnnmodel, ntokens, args.emsize, args.nhid, args.chunk_size, args.nlayers,
                             args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
     elif args.model == "LSTM":
-        model = RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
+        model = RNNModel(args.rnnmodel, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
     else:
         raise ValueError(" model must be ONLSTM or LSTM")
 

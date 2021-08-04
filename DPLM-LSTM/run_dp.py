@@ -9,7 +9,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 from functools import partial
 import data
 from model import RNNModel
-from dependency_pointer_model import DPRNNModel
+from dependency_pointer_model import DP_ONLSTMModel, DP_RNNModel
 from tqdm import tqdm
 from utils import batchify, batchify_dep_tokenlist, get_batch, get_dep_batch, repackage_hidden, collate_func_for_tok, batchify_dep_indicators
 from dependency_modeling_criterion import DependencyCrossEntropy
@@ -44,7 +44,7 @@ def model_load(args, fn):
 def evaluate(args, data_source, data_dependency, model, corpus, criterion, batch_size=10):
     # Turn on evaluation mode which disables dropout.
     model.eval()
-    if args.model == 'QRNN': model.reset()
+    if args.rnnmodel == 'QRNN': model.reset()
     total_loss = 0
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(batch_size)
@@ -70,7 +70,7 @@ def evaluate(args, data_source, data_dependency, model, corpus, criterion, batch
 
 def train_a_epoch(args, train_dataset, train_dependency, model, corpus, optimizer, criterion, params, epoch):
     # Turn on training mode which enables dropout.
-    if args.model == 'QRNN': model.reset()
+    if args.rnnmodel == 'QRNN': model.reset()
     total_loss = 0
     start_time = time.time()
     ntokens = len(corpus.dictionary)
@@ -156,7 +156,9 @@ def get_args():
                         help='location of the data dependency ')
     parser.add_argument('--dataname', type=str, default='news',
                         help='name of the data')
-    parser.add_argument('--model', type=str, default='LSTM',
+    parser.add_argument('--model', type=str, default='DP_LSTM',
+                        help='type of recurrent net (AWD-LSTM, ONLSTM)')
+    parser.add_argument('--rnnmodel', type=str, default='LSTM',
                         help='type of recurrent net (LSTM, QRNN, GRU)')
     parser.add_argument('--emsize', type=int, default=400,
                         help='size of word embeddings')
@@ -317,9 +319,14 @@ def main():
         criterion = nn.CrossEntropyLoss()
     ntokens = len(corpus.dictionary)
         
-    model = DPRNNModel(args.model, ntokens, args.emsize, args.nhid, args.chunk_size, args.nlayers,
+    if args.model == "DP_ONLSTM":
+        model = DP_ONLSTMModel(args.rnnmodel, ntokens, args.emsize, args.nhid, 
+                        args.chunk_size, args.nlayers,
                         args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied, args.is_train_dependency)
-
+    elif args.model == "DP_LSTM":
+        model = DP_RNNModel(args.rnnmodel, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied, args.is_train_dependency)
+    else:
+        raise ValueError(" model must be DP_ONLSTM or DP_LSTM")
     ###############################################################################
     # Build the model
     ###############################################################################
@@ -330,8 +337,14 @@ def main():
         optimizer.param_groups[0]['lr'] = args.lr
         model.dropouti, model.dropouth, model.dropout, args.dropoute = args.dropouti, args.dropouth, args.dropout, args.dropoute
         if args.wdrop:
-            for rnn in model.rnn.cells:
-                rnn.hh.dropout = args.wdrop
+            if args.model == "DP_ONLSTM":
+                for rnn in model.rnn.cells:
+                    rnn.hh.dropout = args.wdrop
+            elif args.model == "DP_LSTM":
+                from weight_drop import WeightDrop
+                for rnn in model.rnns:
+                    if type(rnn) == WeightDrop: rnn.dropout = args.wdrop
+                    elif rnn.zoneout > 0: rnn.zoneout = args.wdrop
         if args.is_train_dependency:
             model.is_train_dependency = True
         else:
