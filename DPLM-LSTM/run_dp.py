@@ -8,7 +8,6 @@ import torch.nn as nn
 import torch.optim.lr_scheduler as lr_scheduler
 from functools import partial
 import data
-from model import RNNModel
 from dependency_pointer_model import DP_ONLSTMModel, DP_RNNModel
 from tqdm import tqdm
 from utils import batchify, batchify_dep_tokenlist, get_batch, get_dep_batch, repackage_hidden, collate_func_for_tok, batchify_dep_indicators
@@ -367,7 +366,7 @@ def main():
         best_val_loss = []
         stored_loss = 100000000
         try:
-            if args.reset_optimizer:
+            if args.reset_optimizer or args.resume == '':
                 optimizer = None
                 # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
                 if args.optimizer == 'sgd':
