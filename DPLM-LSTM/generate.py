@@ -139,7 +139,7 @@ if args.task == 'unconditional_gen':
                 raw_output_history = torch.cat((raw_output_history, raw_output), dim=0)
                 # raw_output_history: [seq_len, 1, embeding_size]
                 query = model.query(raw_output).transpose(0,1)
-                attention  = torch.bmm(query, raw_output_history.permute(1,2,0))
+                attention = torch.bmm(query, raw_output_history.permute(1,2,0))
                 attention = attention / math.sqrt(raw_output.size(-1)) #[1, 1, seq_len]
                 if args.context_length >= 0:
                     attention[0][0][:-args.context_length] = -float('Inf')
@@ -166,6 +166,8 @@ if args.task == 'unconditional_gen':
                 if word == '<eos>':
                     outf.write('\n')
                     eos_num += 1
+                    raw_output_history = torch.zeros((0, 1, args.emsize), dtype=torch.float).to(device)
+                    dep_logits_history = torch.zeros((1, 0, ntokens), dtype=torch.float).to(device)
                     if eos_num == 1000:
                         break
                 else:
@@ -203,28 +205,47 @@ elif args.task == "story_gen":
     total_input_lines_num = len(story_input_lines)
     for i, line in enumerate(story_input_lines):
         line_split = ['<eos>'] + line.strip().split()
-
         hidden = model.init_hidden(1)
         input = torch.LongTensor([[corpus.dictionary.word2idx[token] for token in line_split]]).to(device)
         input = input.transpose(0,1)
+        raw_output_history = torch.zeros((0, 1, args.emsize), dtype=torch.float).to(device)
+        dep_logits_history = torch.zeros((1, 0, ntokens), dtype=torch.float).to(device)
         for _ in range(1000):
             if args.is_dp_model:
-                if i % args.log_interval == 0:
-                    logger.info('| Generated {}/{}'.format(i, total_input_lines_num))
+                raw_output, hidden = model.generate_step(input, hidden)
+                # raw_output: [seq_len, 1(batch_size), embeding_size]
+                raw_output = raw_output[-1:]
+                raw_output_history = torch.cat((raw_output_history, raw_output), dim=0)
+                query = model.query(raw_output).transpose(0,1)
+                attention = torch.bmm(query, raw_output_history.permute(1,2,0))
+                attention = attention / math.sqrt(raw_output.size(-1)) #[1, 1, seq_len]
+                if args.context_length >= 0:
+                    attention[0][0][:-args.context_length] = -float('Inf')
+                weight = F.softmax(attention, dim=-1)
+                dep_logit = model.decoder(model.lockdrop(raw_output, model.dropout)).transpose(0,1) # [1(batch), 1(seqlen), ntokens]
+                dep_logits_history = torch.cat((dep_logits_history, dep_logit), dim=1)
+                word_weights = torch.bmm(weight, dep_logits_history).squeeze().data.div(args.temperature)
+                word_weights = top_k_top_p_filtering(word_weights, args.topk, args.topp)
+                word_idx = torch.multinomial(torch.softmax(word_weights,-1), 1).cpu()[0]
+                input = torch.LongTensor([[word_idx]]).to(device)
+                word = corpus.dictionary.idx2word[word_idx]
             else:
+                # print("input size is : ", input.size())
                 output, hidden = model(input, hidden)
+                # print("before output size is : ", output.size())
                 output = output[-1]
+                # print("after output size is : ", output.size())
                 word_weights = model.decoder(output).data.div(args.temperature)
                 word_weights = top_k_top_p_filtering(word_weights, args.topk, args.topp)
                 word_idx = torch.multinomial(torch.softmax(word_weights,-1), 1).cpu()[0]
                 input = torch.LongTensor([[word_idx]]).to(device)
                 word = corpus.dictionary.idx2word[word_idx]
-                if word == '<eos>':
-                    outf.write('\n')
-                    break
-                else:
-                    outf.write(word +  ' ')
-                hidden = repackage_hidden(hidden)
+            if word == '<eos>':
+                outf.write('\n')
+                break
+            else:
+                outf.write(word +  ' ')
+            hidden = repackage_hidden(hidden)
         if i % args.log_interval == 0:
             logger.info('| Generated {}/{}'.format(i, total_input_lines_num))
 

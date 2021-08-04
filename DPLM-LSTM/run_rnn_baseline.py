@@ -8,7 +8,8 @@ import torch.nn as nn
 import torch.optim.lr_scheduler as lr_scheduler
 from functools import partial
 import data
-from model import RNNModel
+from ONLSTM_model import ONRNNModel
+from AWDLSTM_model import RNNModel
 from tqdm import tqdm
 from utils import batchify, batchify_dep_tokenlist, get_batch, repackage_hidden, collate_func_for_tok
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
@@ -42,7 +43,7 @@ def model_load(args, fn):
 def evaluate(args, data_source, model, corpus, criterion, batch_size=10):
     # Turn on evaluation mode which disables dropout.
     model.eval()
-    if args.model == 'QRNN': model.reset()
+    if args.rnnmodel == 'QRNN': model.reset()
     total_loss = 0
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(batch_size)
@@ -60,7 +61,7 @@ def evaluate(args, data_source, model, corpus, criterion, batch_size=10):
 
 def train_a_epoch(args, train_dataset, model, corpus, optimizer, criterion, params, epoch):
     # Turn on training mode which enables dropout.
-    if args.model == 'QRNN': model.reset()
+    if args.rnnmodel == 'QRNN': model.reset()
     total_loss = 0
     start_time = time.time()
     ntokens = len(corpus.dictionary)
@@ -83,13 +84,11 @@ def train_a_epoch(args, train_dataset, model, corpus, optimizer, criterion, para
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         hidden = repackage_hidden(hidden)
         optimizer.zero_grad()
-        logger.info("input size is : {}".format(input.size()))
         output, hidden, rnn_hs, dropped_rnn_hs = model(input, hidden, return_h=True)
         #rnn_hs is [layer_size, lengths, batch_size, hidden_state_size]
-        print("output size is : ", output.size())
+       
         # output, hidden = model(data, hidden, return_h=False)
         raw_loss = criterion(model.decoder.weight, model.decoder.bias, output, targets)
-        print("raw_loss is : ", raw_loss)
         loss = raw_loss
         # Activiation Regularization
         if args.alpha:
@@ -136,7 +135,9 @@ def get_args():
     parser.add_argument('--dataname', type=str, default='news',
                         help='name of the data')
     parser.add_argument('--model', type=str, default='LSTM',
-                        help='type of recurrent net (LSTM, QRNN, GRU)')
+                        help='type of recurrent net (AWD-LSTM, ONLSTM)')
+    parser.add_argument('--rnnmodel', type=str, default='LSTM',
+                        help='type of recurrent cell (LSTM, QRNN, GRU)')
     parser.add_argument('--emsize', type=int, default=400,
                         help='size of word embeddings')
     parser.add_argument('--nhid', type=int, default=1150,
@@ -277,9 +278,14 @@ def main():
     from splitcross import SplitCrossEntropyLoss
     criterion = None
     ntokens = len(corpus.dictionary)
-        
-    model = RNNModel(args.model, ntokens, args.emsize, args.nhid, args.chunk_size, args.nlayers,
-                        args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
+    
+    if args.model == "ONLSTM":
+        model = ONRNNModel(args.rnnmodel, ntokens, args.emsize, args.nhid, args.chunk_size, args.nlayers,
+                            args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
+    elif args.model == "LSTM":
+        model = RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
+    else:
+        raise ValueError(" model must be ONLSTM or LSTM")
 
     ###############################################################################
     # Build the model
@@ -291,8 +297,14 @@ def main():
         optimizer.param_groups[0]['lr'] = args.lr
         model.dropouti, model.dropouth, model.dropout, args.dropoute = args.dropouti, args.dropouth, args.dropout, args.dropoute
         if args.wdrop:
-            for rnn in model.rnn.cells:
-                rnn.hh.dropout = args.wdrop
+            if args.model == "ONLSTM":
+                for rnn in model.rnn.cells:
+                    rnn.hh.dropout = args.wdrop
+            elif args.model == "LSTM":
+                from weight_drop import WeightDrop
+                for rnn in model.rnns:
+                    if type(rnn) == WeightDrop: rnn.dropout = args.wdrop
+                    elif rnn.zoneout > 0: rnn.zoneout = args.wdrop
     ###
     if not criterion:
         splits = []
@@ -342,7 +354,8 @@ def main():
                     tmp = {}
                     for prm in model.parameters():
                         tmp[prm] = prm.data.clone()
-                        prm.data = optimizer.state[prm]['ax'].clone()
+                        if 'ax' in optimizer.state[prm]:
+                            prm.data = optimizer.state[prm]['ax'].clone()
 
                     val_loss2 = evaluate(args, val_data, model, corpus, criterion, eval_batch_size)
                     logger.info('-' * 89)

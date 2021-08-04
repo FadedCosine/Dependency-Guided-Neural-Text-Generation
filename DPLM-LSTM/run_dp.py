@@ -192,6 +192,8 @@ def get_args():
                         help='random seed')
     parser.add_argument('--nonmono', type=int, default=5,
                         help='random seed')
+    parser.add_argument('--reset_optimizer', action='store_true',
+                        help='if reset optimizer')
     parser.add_argument('--cuda', action='store_true',
                         help='use CUDA')
     parser.add_argument('--do_eval', action='store_true',
@@ -352,13 +354,14 @@ def main():
         best_val_loss = []
         stored_loss = 100000000
         try:
-            optimizer = None
-            # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
-            if args.optimizer == 'sgd':
-                optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
-            if args.optimizer == 'adam':
-                optimizer = torch.optim.Adam(params, lr=args.lr, betas=(0, 0.999), eps=1e-9, weight_decay=args.wdecay)
-                scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.5, patience=2, threshold=0)
+            if args.reset_optimizer:
+                optimizer = None
+                # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
+                if args.optimizer == 'sgd':
+                    optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
+                if args.optimizer == 'adam':
+                    optimizer = torch.optim.Adam(params, lr=args.lr, betas=(0, 0.999), eps=1e-9, weight_decay=args.wdecay)
+                    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.5, patience=2, threshold=0)
             # Train!
         
             for epoch in range(args.trained_epoches + 1, args.epochs + 1):
