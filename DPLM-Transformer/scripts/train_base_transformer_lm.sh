@@ -4,8 +4,8 @@ lr=0.0005
 TEXT=rocstories
 BREAK_MODE=eos
 TOKEN_PER_SAMPLE=512
-RESULT=checkpoints/$TEXT/transformer_lm_eos
-CUDA_VISIBLE_DEVICES=2,3 fairseq-train ../data/$TEXT/data-bin \
+RESULT=checkpoints/$TEXT/transformer_lm
+CUDA_VISIBLE_DEVICES=0,1,2,3 fairseq-train ../data/$TEXT/data-bin \
   --task language_modeling \
   --sample-break-mode $BREAK_MODE --max-tokens $MAX_TOKEN \
   --save-dir $RESULT \
@@ -17,6 +17,3 @@ CUDA_VISIBLE_DEVICES=2,3 fairseq-train ../data/$TEXT/data-bin \
   --distributed-world-size 2 \
   --ddp-backend legacy_ddp \
   --max-epoch 50 
-  #--warmup-updates "$warmup_updates" --warmup-init-lr 1e-07 \
-  # --batch-size $BATCH_SIZE \
-  # --tokens-per-sample $TOKEN_PER_SAMPLE \

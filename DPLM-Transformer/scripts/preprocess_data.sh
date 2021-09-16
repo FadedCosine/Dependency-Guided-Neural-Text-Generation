@@ -1,4 +1,3 @@
-
 TEXT=rocstories
 fairseq-preprocess \
     --only-source \

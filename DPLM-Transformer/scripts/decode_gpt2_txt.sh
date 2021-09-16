@@ -1,8 +1,9 @@
-Model=gpt2_eos
-TEXT=rocstories
-Path=checkpoints/$TEXT/$Model/samples
-for P in 0.5 0.6 0.7 0.8 0.9 0.95
+Model=dpgpt2_eos
+TEXT=news
+Path=checkpoints/$TEXT/samples
+for P in 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1
 do
+    echo "Decode ${Model} topp ${P} files..."
     python -m examples.roberta.multiprocessing_bpe_encoder \
         --encoder-json gpt2_bpe/encoder.json \
         --vocab-bpe gpt2_bpe/vocab.bpe \
@@ -11,21 +12,3 @@ do
         --keep-empty \
         --workers 60; \
 done
-
-for K in 1 5 10 30 50 70 100
-do
-    python -m examples.roberta.multiprocessing_bpe_encoder \
-        --encoder-json gpt2_bpe/encoder.json \
-        --vocab-bpe gpt2_bpe/vocab.bpe \
-        --inputs $Path/$Model''_topk$K''.bpe \
-        --outputs $Path/$Model''_topk$K''.txt \
-        --keep-empty \
-        --workers 60; \
-done
-# python -m examples.roberta.multiprocessing_bpe_encoder \
-#     --encoder-json gpt2_bpe/encoder.json \
-#     --vocab-bpe gpt2_bpe/vocab.bpe \
-#     --inputs /home/yangzhixian/DependencyGuided/DPLM-Transformer/gpt2_gen_debug_withbpe.txt \
-#     --outputs /home/yangzhixian/DependencyGuided/DPLM-Transformer/gpt2_gen_debug_withbpe_decode.txt \
-#     --keep-empty \
-#     --workers 60
