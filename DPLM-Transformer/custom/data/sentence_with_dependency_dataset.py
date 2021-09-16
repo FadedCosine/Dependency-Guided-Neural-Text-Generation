@@ -12,14 +12,14 @@ class SentenceWithDependencyDataset(FairseqDataset):
         self,
         dataset,
         sizes,
-        dataset_dependency,
+        dependency_token_lists,
         pad,
         eos,
-        break_mode=None,
         document_sep_len=1,
         use_plasma_view=False,
         split_path=None,
         plasma_path=None,
+        break_mode='eos',
         block_size=0,
     ):
         super().__init__()
@@ -39,7 +39,8 @@ class SentenceWithDependencyDataset(FairseqDataset):
         sizes[idx]即为txt中第idx+1行的token_list的len
         """
         self.dataset = dataset
-        self.dataset_dependency = dataset_dependency
+        # self.dataset_dependency = dependency_token_lists
+        self.dependency_token_lists = dependency_token_lists
         
         self.pad = pad
         self.eos = eos
@@ -65,31 +66,9 @@ class SentenceWithDependencyDataset(FairseqDataset):
             self._block_to_dataset_index = plasma_utils.PlasmaArray(
                 block_to_dataset_index
             )
-        self.dependency_token_lists = self._build_dependency_token_list(dataset, dataset_dependency, sizes)
-    def _build_dependency_token_list(self, dataset, dataset_dependency, sizes):
-        """
-        构造self.train等的dependency token list
-        """
-        dependency_token_list = []
-        for idx in range(len(sizes)):
-            cur_dep_token_list = [[] for _ in range(sizes[idx])]
-            item = dataset[idx]
-            source = torch.cat([item.new([self.eos]), item[:-1]])
-         
-            cur_dep_token_list[-1].append(self.eos)
-            # print(" len of source is : ", len(source))
-            # print(" len of head_list[idx] is : ", len(head_list[idx]))
-            for i, head in enumerate(dataset_dependency[idx]):
-                cur_idx = i + 1
-                if cur_idx < head:
-                    cur_dep_token_list[cur_idx].append(source[head])
-                elif cur_idx > head:
-                    cur_dep_token_list[head].append(source[cur_idx])
-                else:
-                    raise ValueError("Improssible! One token's dependency head is itself.")
-            dependency_token_list.append(cur_dep_token_list)
-            #dependency_token_list只是每个句子的每个位置的于其有dependency关系的token id 的list，用于训练还需要后续转换成indicator
-        return dependency_token_list
+        
+        # self.dependency_token_lists = self._build_dependency_token_list(dataset, dataset_dependency, sizes)
+    
     @staticmethod
     def _build_slice_indices(
         sizes, break_mode, document_sep_len, block_size
@@ -173,8 +152,37 @@ class SentenceWithDependencyDataset(FairseqDataset):
     
     def __len__(self):
         return len(self.slice_indices)
-    
+    # def __getitem__(self, index):
+    #     start_ds_idx, start_offset, end_ds_idx = self.block_to_dataset_index[index]
+
+    #     buffer = torch.cat(
+    #         [self.dataset[idx] for idx in range(start_ds_idx, end_ds_idx + 1)]
+    #     )
+    #     slice_s, slice_e = self.slice_indices[index]
+    #     length = slice_e - slice_s
+    #     s, e = start_offset, start_offset + length
+    #     item = buffer[s:e]
+    #     item_dependency = self.dataset_dependency[index]
+    #     """
+    #     每个item相较于原句要在尾部多一个eos，这是在fairseq-preprocess的时候加上的;
+    #     另外，我期望self.dataset_dependency[index]依然是 和syndehead文件中的每一行一模一样的列表
+    #     """
+
+    #     source = torch.cat([item.new([self.eos]), buffer[0 : e - 1]])
+    #     dependency_token_list = [[] for _ in range(length)]
+    #     dependency_token_list[-1].append(self.eos)
+    #     for i, head in enumerate(item_dependency):
+    #         cur_idx = i + 1
+    #         if cur_idx < head:
+    #             dependency_token_list[cur_idx].append(source[head].item())
+    #         elif cur_idx > head:
+    #             dependency_token_list[head].append(source[cur_idx].item())
+    #         else:
+    #             raise ValueError("Improssible! One token's dependency head is itself.")
+    #     #这里没用vocab，所以在下一个WrapDependencyDataset中把dependency_token_list转换成dependency_set_indicator
+    #     return source, dependency_token_list
     def __getitem__(self, index):
+        #! 这里存在一些bug，使得多卡训不起来
         start_ds_idx, start_offset, end_ds_idx = self.block_to_dataset_index[index]
 
         buffer = torch.cat(
@@ -193,9 +201,11 @@ class SentenceWithDependencyDataset(FairseqDataset):
             source = torch.cat([item.new([self.eos]), buffer[s : e - 1]])
         else:
             source = buffer[s - 1 : e - 1]
+      
         dependency_buffer = [dep_item for idx in range(start_ds_idx, end_ds_idx + 1) for dep_item in self.dependency_token_lists[idx] ]
-        
+ 
         dependency_token_item = dependency_buffer[s:e]
+       
         if self.break_mode == "eos":
             assert dependency_token_item == self.dependency_token_lists[index]
         assert source.size(-1) == len(dependency_token_item)
@@ -264,8 +274,6 @@ class WrapDependencyDataset(FairseqDataset):
         tgt_vocab=None,
         add_eos_for_other_targets=False,
         shuffle=False,
-        break_mode="eos",
-        block_size=0,
     ):
         self.dataset = dataset
         self.sizes = np.array(sizes)
@@ -273,8 +281,6 @@ class WrapDependencyDataset(FairseqDataset):
         self.tgt_vocab = tgt_vocab or src_vocab
         self.add_eos_for_other_targets = add_eos_for_other_targets
         self.shuffle = shuffle
-        self.break_mode=break_mode
-        self.block_size=block_size
         
     def __len__(self):
         return len(self.dataset)

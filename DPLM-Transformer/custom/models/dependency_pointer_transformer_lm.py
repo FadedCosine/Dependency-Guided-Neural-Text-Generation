@@ -6,6 +6,7 @@ from fairseq.dataclass import ChoiceEnum, FairseqDataclass
 from fairseq.models import (
     FairseqLanguageModel,
     register_model,
+    FairseqIncrementalDecoder,
     register_model_architecture,
 )
 from fairseq.models.transformer_lm import TransformerLanguageModel
@@ -281,6 +282,7 @@ class DPTransformerLM(FairseqLanguageModel):
             assert args.decoder_input_dim == args.decoder_output_dim
 
         decoder = DGTransformerPointerGeneratorDecoder(args, task.target_dictionary, embed_tokens, no_encoder_attn=True)
+        # decoder = DPOnlyTransformerDecoder(args, task.target_dictionary, embed_tokens)
         # decoder = TransformerDecoder(
         #     args, task.target_dictionary, embed_tokens, no_encoder_attn=True
         # )
@@ -316,6 +318,8 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         # print("args.dependency_model_path is : ", args.dependency_model_path)
         # print("args.dependency_model_filename is : ", args.dependency_model_filename)
         # print("args.data_path_for_load_model is : ", args.data_path_for_load_model)
+        args.dependency_model_path = "/home/yangzhixian/DependencyGuided/DPLM-Transformer/checkpoints/news/dependency_lm_CE"
+        args.data_path_for_load_model = "/home/yangzhixian/DependencyGuided/data/news/data-bin"
         self.dependency_module = hub_utils.from_pretrained(
             args.dependency_model_path,
             args.dependency_model_filename,
@@ -403,7 +407,9 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
             # print("dep_x_cur is size : ", dep_x_cur.size())
             prev_output_embed = self.embed_tokens(prev_output_tokens)
             prev_output_embed *= self.embed_scale
-           
+            # dep_attn : [batch_size, cur_seq_len, seq_len]
+            # dep_x_all_output : [batch_size, seq_len, vocab_size]
+            # print("dep_attn is : ", dep_attn)
             assert dep_attn.shape[2] == dep_x_all_output.shape[1]
             # assert tok_attn.shape[2] == dep_x_all_output.shape[1]
             # dep_context_state = torch.bmm(dep_attn, dep_x_all_output)
@@ -418,6 +424,8 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
             tok_x = self.output_layer(tok_x, dep_x_all_output, dep_attn, p_gens)
             # assert tok_attn is not None
             # tok_x = self.output_layer(tok_x, dep_x_all_output, tok_attn, p_gens)
+            # print("dep_attn is : ", dep_attn)
+            # print("idx is : ", dep_attn.size(-1))
         return tok_x, tok_extra
 
     def output_layer(
@@ -457,6 +465,7 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         # print("gen_dists size is : ", gen_dists.size())
         assert dep_attn.shape[2] == dep_token_logits.shape[1]
         # print("torch.sum(dep_attn, -1) is : ", torch.sum(dep_attn, -1))
+        
         weighted_sum_dep_dists = torch.bmm(dep_attn, dep_token_logits)
         # print("dep_token_logits size is : ", dep_token_logits.size())
         # print("weighted_sum_dep_dists size is : ", weighted_sum_dep_dists.size())
@@ -478,6 +487,151 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         # probabilities.
         return probs.clamp(1e-10, 1.0).log() if log_probs else probs
 
+
+
+class DPOnlyTransformerDecoder(FairseqIncrementalDecoder):
+    """
+    Transformer decoder consisting of *args.decoder_layers* layers. Each layer
+    is a :class:`TransformerDecoderLayer`. 
+    The DG variant means there is a Dependency Decoder with fixed parameters inside this Transformer decoder. The pointer-generator variant mixes
+    the output probabilities with an dependency attention weighted dependency probabilities in the output layer.
+
+    Args:
+        args (argparse.Namespace): parsed command-line arguments
+        dictionary (~fairseq.data.Dictionary): decoding dictionary
+        embed_tokens (torch.nn.Embedding): output embedding
+    """
+    def __init__(self, args, dictionary, embed_tokens):
+        super().__init__(dictionary)
+        # In the pointer-generator model these arguments define the decoder
+        # layer and the number of attention heads that will be averaged to
+        # create the alignment for pointing.
+        self.alignment_heads = args.alignment_heads
+        self.alignment_layer = args.alignment_layer
+        input_embed_dim = embed_tokens.embedding_dim
+        assert args.dependency_model_path is not None
+        assert args.dependency_model_filename is not None
+        # print("args.dependency_model_path is : ", args.dependency_model_path)
+        # print("args.dependency_model_filename is : ", args.dependency_model_filename)
+        # print("args.data_path_for_load_model is : ", args.data_path_for_load_model)
+        self.dependency_module = hub_utils.from_pretrained(
+            args.dependency_model_path,
+            args.dependency_model_filename,
+            args.data_path_for_load_model,
+        )
+        self.dependency_decoder = self.dependency_module["models"][0]
+     
+        # Generation probabilities / interpolation coefficients are predicted
+        # from the both decoders input embedding (the same), the token decoder output, and the dependency decoder output      
+    
+    def forward(
+        self,
+        prev_output_tokens,
+        encoder_out: Optional[Dict[str, List[Tensor]]] = None,
+        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        features_only: bool = False,
+        alignment_layer: Optional[int] = 0,
+        alignment_heads: Optional[int] = 1,
+        src_lengths: Optional[Any] = None,
+        return_all_hiddens: bool = False,
+    ):
+        """
+        Args:
+            prev_output_tokens (LongTensor): previous decoder outputs of shape
+                `(batch, tgt_len)`, for teacher forcing
+            encoder_out (optional): output from the encoder, used for
+                encoder-side attention
+            incremental_state (dict, optional): dictionary used for storing
+                state during :ref:`Incremental decoding`
+            features_only (bool, optional): only return features without
+                applying output layer (default: False)
+            alignment_layer (int, optional): 0-based index of the layer to be
+                used for pointing (default: 0)
+            alignment_heads (int, optional): number of attention heads to be
+                used for pointing (default: 1)
+
+        Returns:
+            tuple:
+                - the decoder's output of shape `(batch, tgt_len, vocab)`
+                - a dictionary with any model-specific outputs
+        """
+        # The normal Transformer model doesn't pass the alignment_layer and
+        # alignment_heads parameters correctly. We use our local variables.
+        # print("prev_output_tokens size is : ", prev_output_tokens.size())
+   
+        dep_x_all_output, dep_extra = self.dependency_decoder.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            # incremental_state=incremental_state,
+            alignment_layer=self.alignment_layer,
+            alignment_heads=self.alignment_heads,
+        )
+        # features_only is always false
+        if not features_only:
+            if incremental_state is not None: #means that we are in generating phase
+                prev_output_tokens = prev_output_tokens[:, -1:]
+                dep_x_cur = dep_x_all_output[:, -1:, :]
+                dep_attn: Optional[Tensor] = dep_extra["attn"][0][:, -1:, :]
+            else:
+                dep_x_cur = dep_x_all_output
+                dep_attn: Optional[Tensor] = dep_extra["attn"][0]
+            # print("dep_x_all_output is size : ", dep_x_all_output.size())
+            # print("dep_attn is size : ", dep_attn.size())
+            # dep_attn : [batch_size, cur_seq_len, seq_len]
+            # dep_x_all_output : [batch_size, seq_len, vocab_size]
+            # print("dep_attn is : ", dep_attn)
+            assert dep_attn.shape[2] == dep_x_all_output.shape[1]
+            # assert tok_attn.shape[2] == dep_x_all_output.shape[1]
+            # dep_context_state = torch.bmm(dep_attn, dep_x_all_output))
+            """
+            transformer 结构中的self-attn在decoder的t时刻的hidden state dep_x_cur，本身就包含着对于之前所有attn向量和其v值的加权求和
+            """
+           
+            assert dep_attn is not None
+            tok_x = self.output_layer(dep_x_all_output, dep_attn)
+            # assert tok_attn is not None
+            # tok_x = self.output_layer(tok_x, dep_x_all_output, tok_attn, p_gens)
+        return tok_x, dep_extra
+
+    def output_layer(
+        self,
+        dep_features: Tensor,
+        dep_attn: Tensor,
+        # dep_loss_type: str,
+    ) -> Tensor:
+        """
+        Project dependency attention features to the weight of dependency probabilities
+        """
+        if self.dependency_decoder.decoder.adaptive_softmax is None:
+            dep_token_logits = self.dependency_decoder.decoder.output_projection(dep_features)
+        else:
+            dep_token_logits = dep_features
+
+        dep_token_logits = self.dependency_decoder.get_normalized_probs_scriptable(
+            (dep_token_logits, None), log_probs=False, sample=None
+        )
+        
+        assert dep_attn.shape[2] == dep_token_logits.shape[1]
+        # print("torch.sum(dep_attn, -1) is : ", torch.sum(dep_attn, -1))
+        weighted_sum_dep_dists = torch.bmm(dep_attn, dep_token_logits)
+        # print("dep_token_logits size is : ", dep_token_logits.size())
+        # print("weighted_sum_dep_dists size is : ", weighted_sum_dep_dists.size())
+
+        return weighted_sum_dep_dists
+    def get_normalized_probs(
+        self, 
+        net_output: Tuple[Tensor, Optional[Dict[str, List[Optional[Tensor]]]]],
+        log_probs: bool,
+        sample: Optional[Dict[str, Tensor]] = None,
+    ):
+        """
+        Get normalized probabilities (or log probs) from a net's output.
+        Pointer-generator network output is already normalized.
+        """
+        probs = net_output[0]
+        # Make sure the probabilities are greater than zero when returning log
+        # probabilities.
+        return probs.clamp(1e-10, 1.0).log() if log_probs else probs
 
 
 
@@ -547,11 +701,12 @@ def base_lm_architecture(args):
     args.alignment_layer = getattr(args, "alignment_layer", -1)
     if args.alignment_layer < 0:
         args.alignment_layer = args.decoder_layers + args.alignment_layer
-    args.dependency_model_path = getattr(args, "dependency_model_path", "/home/yangzhixian/DependencyGuided/DG/checkpoints/news/dependency_predictor")
+    args.dependency_model_path = getattr(args, "dependency_model_path", "/home/yangzhixian/DependencyGuided/DPLM-Transformer/checkpoints/news/dependency_lm_CE")
     args.dependency_model_filename = getattr(args, "dependency_model_filename", "checkpoint_best.pt")
     args.force_generation = getattr(args, "force_generation", 0)
     args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", False)
     
+
 
 @register_model_architecture("dependency_pointer_transformer_lm", "dependency_pointer_transformer_lm_big")
 def dependency_pointer_transformer_lm_big(args):
@@ -600,6 +755,10 @@ def dependency_pointer_transformer_lm_gpt(args):
     args.dropout = getattr(args, "dropout", 0.1)
     args.attention_dropout = getattr(args, "attention_dropout", 0.1)
     args.activation_fn = getattr(args, "activation_fn", "gelu")
+    base_lm_architecture(args)
+
+@register_model_architecture("dependency_pointer_transformer_lm", "dependency_pointer_only_transformer_lm_gpt")
+def dependency_pointer_only_transformer_lm_gpt(args):
     base_lm_architecture(args)
 
 

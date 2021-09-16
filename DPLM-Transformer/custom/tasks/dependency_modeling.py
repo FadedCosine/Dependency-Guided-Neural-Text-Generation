@@ -190,6 +190,28 @@ class DependencyModelingTask(LegacyFairseqTask):
             raise FileNotFoundError(f"Dataset not found: {split} ({split_path})")
         if len(dataset_dependency) == 0:
             raise FileNotFoundError(f"Dataset dependency not found: {split} ({split_dependency_path + self.args.dependency_suffix})")
+        def _build_dependency_token_list(dataset, dataset_dependency, sizes, eos_idx):
+            """
+            构造self.train等的dependency token list
+            """
+            dependency_token_list = []
+            for idx in range(len(sizes)):
+                cur_dep_token_list = [[] for _ in range(sizes[idx])]
+                item = dataset[idx]
+                source = torch.cat([item.new([eos_idx]), item[:-1]])
+            
+                cur_dep_token_list[-1].append(eos_idx)
+                for i, head in enumerate(dataset_dependency[idx]):
+                    cur_idx = i + 1
+                    if cur_idx < head:
+                        cur_dep_token_list[cur_idx].append(source[head])
+                    elif cur_idx > head:
+                        cur_dep_token_list[head].append(source[cur_idx])
+                    else:
+                        raise ValueError("Improssible! One token's dependency head is itself.")
+                dependency_token_list.append(cur_dep_token_list)
+                #dependency_token_list只是每个句子的每个位置的于其有dependency关系的token id 的list，用于训练还需要后续转换成indicator
+            return dependency_token_list
 
         dataset = maybe_shorten_dataset(
             dataset,
@@ -199,18 +221,20 @@ class DependencyModelingTask(LegacyFairseqTask):
             self.args.tokens_per_sample,
             self.args.seed,
         )
-    
+        #! SentenceWithDependencyDataset存在一些bug，使得多卡训练的时候跑不起来
+        dependency_token_lists = _build_dependency_token_list(dataset, dataset_dependency, dataset.sizes, self.dictionary.eos())
         dataset = SentenceWithDependencyDataset(
             dataset,
             dataset.sizes,
-            dataset_dependency,
+            dependency_token_lists,
             pad=self.dictionary.pad(),
             eos=self.dictionary.eos(),
-            break_mode=self.args.sample_break_mode,
             use_plasma_view=self.args.use_plasma_view,
             split_path=split_path,
             plasma_path=self.args.plasma_path,
+            break_mode=self.args.sample_break_mode,
             block_size=self.args.tokens_per_sample,
+
         )
 
         add_eos_for_other_targets = (
@@ -225,8 +249,6 @@ class DependencyModelingTask(LegacyFairseqTask):
             tgt_vocab=self.output_dictionary,
             add_eos_for_other_targets=add_eos_for_other_targets,
             shuffle=True,
-            break_mode=self.args.sample_break_mode,
-            block_size=self.args.tokens_per_sample,
         )
         
     def build_dataset_for_inference(self, src_tokens, src_lengths, **kwargs):
