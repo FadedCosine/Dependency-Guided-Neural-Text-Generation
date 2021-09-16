@@ -1,6 +1,4 @@
 import argparse
-from model import RNNModel
-from main import model_load
 from utils import repackage_hidden
 import torch
 import torchtext
@@ -73,6 +71,8 @@ parser.add_argument('--task', type=str, default='unconditional_gen', choices=['u
 parser.add_argument('--story_input', type=str, default='../data/rocstories/test_input.txt')
 parser.add_argument('--words', type=int, default='1000',
                     help='number of words to generate')
+parser.add_argument('--sentences', type=int, default='5000',
+                    help='number of sentences to generate')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
 parser.add_argument('--cuda', action='store_true',
@@ -133,7 +133,8 @@ if args.task == 'unconditional_gen':
         if args.is_dp_model:
             raw_output_history = torch.zeros((0, 1, args.emsize), dtype=torch.float).to(device)
             dep_logits_history = torch.zeros((1, 0, ntokens), dtype=torch.float).to(device)
-            for i in range(args.words):
+            have_generated_sentences = 0
+            while have_generated_sentences < args.sentences:
                 raw_output, hidden = model.generate_step(input, hidden)
                 # raw_output: [1, 1, embeding_size]
                 raw_output_history = torch.cat((raw_output_history, raw_output), dim=0)
@@ -147,7 +148,8 @@ if args.task == 'unconditional_gen':
                 dep_logit = model.decoder(model.lockdrop(raw_output, model.dropout)).transpose(0,1) # [1(batch), 1(seqlen), ntokens]
                 dep_logits_history = torch.cat((dep_logits_history, dep_logit), dim=1)
                 word_weights = torch.bmm(weight, dep_logits_history).squeeze().data.div(args.temperature)
-                word_weights = top_k_top_p_filtering(word_weights, args.topk, args.topp)
+                if args.topp != 1:
+                    word_weights = top_k_top_p_filtering(word_weights, args.topk, args.topp)
                 word_idx = torch.multinomial(torch.softmax(word_weights,-1), 1).cpu()[0]
                 input.fill_(word_idx)
                 word = corpus.dictionary.idx2word[word_idx]
@@ -165,20 +167,19 @@ if args.task == 'unconditional_gen':
 
                 if word == '<eos>':
                     outf.write('\n')
-                    eos_num += 1
+                    have_generated_sentences += 1
                     raw_output_history = torch.zeros((0, 1, args.emsize), dtype=torch.float).to(device)
                     dep_logits_history = torch.zeros((1, 0, ntokens), dtype=torch.float).to(device)
-                    if eos_num == 1000:
-                        break
                 else:
                     outf.write(word +  ' ')
                 hidden = repackage_hidden(hidden)
                     
-                if i % args.log_interval == 0:
-                    logger.info('| Generated {}/{} words'.format(i, args.words))
+                if have_generated_sentences > 0 and have_generated_sentences % args.log_interval == 0:
+                    logger.info('| Generated {}/{} sentences'.format(have_generated_sentences, args.sentences))
 
         else:
-            for i in range(args.words):
+            have_generated_sentences = 0
+            while have_generated_sentences < args.sentences:
                 # print("input is : ", input)
                 output, hidden = model(input, hidden)
                 # print("output size is : ", output.size())
@@ -189,14 +190,12 @@ if args.task == 'unconditional_gen':
                 word = corpus.dictionary.idx2word[word_idx]
                 if word == '<eos>':
                     outf.write('\n')
-                    eos_num += 1
-                    if eos_num == 1000:
-                        break
+                    have_generated_sentences += 1
                 else:
                     outf.write(word +  ' ')
                 hidden = repackage_hidden(hidden)
-                if i % args.log_interval == 0:
-                    logger.info('| Generated {}/{} words'.format(i, args.words))
+                if have_generated_sentences > 0 and have_generated_sentences % args.log_interval == 0:
+                    logger.info('| Generated {}/{} sentences'.format(have_generated_sentences, args.sentences))
 elif args.task == "story_gen":
     outf = open(args.outf, 'w')
     story_input = open(args.story_input, 'r')

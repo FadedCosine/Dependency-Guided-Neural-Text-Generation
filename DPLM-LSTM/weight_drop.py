@@ -24,7 +24,6 @@ class WeightDrop(torch.nn.Module):
             self.module.flatten_parameters = self.widget_demagnetizer_y2k_edition
 
         for name_w in self.weights:
-            print('Applying weight drop of {} to {}'.format(self.dropout, name_w))
             w = getattr(self.module, name_w)
             del self.module._parameters[name_w]
             self.module.register_parameter(name_w + '_raw', Parameter(w.data))
@@ -32,14 +31,15 @@ class WeightDrop(torch.nn.Module):
     def _setweights(self):
         for name_w in self.weights:
             raw_w = getattr(self.module, name_w + '_raw')
-            w = None
             if self.variational:
                 mask = torch.autograd.Variable(torch.ones(raw_w.size(0), 1))
                 if raw_w.is_cuda: mask = mask.cuda()
                 mask = torch.nn.functional.dropout(mask, p=self.dropout, training=True)
-                w = torch.nn.Parameter(mask.expand_as(raw_w) * raw_w)
+                w = mask.expand_as(raw_w) * raw_w
             else:
-                w = torch.nn.Parameter(torch.nn.functional.dropout(raw_w, p=self.dropout, training=self.training))
+                w = torch.nn.functional.dropout(raw_w, p=self.dropout, training=self.training)
+            if not self.training:
+                w = w.data
             setattr(self.module, name_w, w)
 
     def forward(self, *args):

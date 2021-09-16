@@ -21,6 +21,8 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+import warnings
+warnings.filterwarnings('ignore')
 
 def model_save(args, fn, model, criterion, optimizer):
     if args.philly:
@@ -124,6 +126,7 @@ def train_a_epoch(args, train_dataset, model, corpus, optimizer, criterion, para
             start_time = time.time()
         batch_idx += 1
         i += seq_len
+    torch.cuda.empty_cache() 
         
 
 def get_args():
@@ -172,6 +175,8 @@ def get_args():
                         help='random seed')
     parser.add_argument('--nonmono', type=int, default=5,
                         help='random seed')
+    parser.add_argument('--reset_optimizer', action='store_true',
+                        help='if reset optimizer')
     parser.add_argument('--cuda', action='store_true',
                         help='use CUDA')
     parser.add_argument('--do_eval', action='store_true',
@@ -329,8 +334,6 @@ def main():
     logger.info('Args: {}'.format(args))
     logger.info('Model total parameters: {}'.format(total_params))
 
-    
-
     # At any point you can hit Ctrl + C to break out of training early.
     if not args.do_eval:
         # Loop over epochs.
@@ -338,13 +341,14 @@ def main():
         best_val_loss = []
         stored_loss = 100000000
         try:
-            optimizer = None
-            # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
-            if args.optimizer == 'sgd':
-                optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
-            if args.optimizer == 'adam':
-                optimizer = torch.optim.Adam(params, lr=args.lr, betas=(0, 0.999), eps=1e-9, weight_decay=args.wdecay)
-                scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.5, patience=2, threshold=0)
+            if args.reset_optimizer or args.resume == '':
+                optimizer = None
+                # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
+                if args.optimizer == 'sgd':
+                    optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
+                if args.optimizer == 'adam':
+                    optimizer = torch.optim.Adam(params, lr=args.lr, betas=(0, 0.999), eps=1e-9, weight_decay=args.wdecay)
+                    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.5, patience=2, threshold=0)
             # Train!
         
             for epoch in range(args.trained_epoches + 1, args.epochs + 1):
@@ -375,7 +379,12 @@ def main():
                         stored_loss = val_loss2
 
                     for prm in model.parameters():
-                        prm.data = tmp[prm].clone()
+                        if prm in tmp.keys():
+                            # nparams_in_temp_keys += 1
+                            # prm.data = tmp[prm].clone()
+                            prm.data = tmp[prm].detach()
+                            prm.requires_grad = True
+                    del tmp
 
                     if epoch == args.finetuning:
                         logger.info('Switching to finetuning')

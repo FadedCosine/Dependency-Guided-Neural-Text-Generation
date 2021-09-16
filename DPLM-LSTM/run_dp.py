@@ -156,7 +156,7 @@ def get_args():
     parser.add_argument('--dataname', type=str, default='news',
                         help='name of the data')
     parser.add_argument('--model', type=str, default='DP_LSTM',
-                        help='type of recurrent net (AWD-LSTM, ONLSTM)')
+                        help='type of recurrent net DP_LSTM, DP_ONLSTM)')
     parser.add_argument('--rnnmodel', type=str, default='LSTM',
                         help='type of recurrent net (LSTM, QRNN, GRU)')
     parser.add_argument('--emsize', type=int, default=400,
@@ -332,9 +332,14 @@ def main():
     ###
     if args.resume:
         logger.info('Resuming model ...')
-        model, _, optimizer = model_load(args, args.resume)
+        load_model, _, optimizer = model_load(args, args.resume)
+        model_dict = model.state_dict()
+        load_model = {k: v for k, v in load_model.state_dict().items() if k in model_dict}
+        model_dict.update(load_model)
+        model.load_state_dict(model_dict)
         optimizer.param_groups[0]['lr'] = args.lr
         model.dropouti, model.dropouth, model.dropout, args.dropoute = args.dropouti, args.dropouth, args.dropout, args.dropoute
+    
         if args.wdrop:
             if args.model == "DP_ONLSTM":
                 for rnn in model.rnn.cells:
@@ -403,7 +408,11 @@ def main():
                         stored_loss = val_loss2
 
                     for prm in model.parameters():
-                        prm.data = tmp[prm].clone()
+                        if prm in tmp.keys():
+                            # prm.data = tmp[prm].clone()
+                            prm.data = tmp[prm].detach()
+                            prm.requires_grad = True
+                    del tmp
 
                     if epoch == args.finetuning:
                         logger.info('Switching to finetuning')

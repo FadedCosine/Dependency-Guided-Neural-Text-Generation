@@ -10,7 +10,6 @@ import math
 from fairseq import utils
 
 class DP_ONLSTMModel(nn.Module):
-
     def __init__(self, rnn_type, ntoken, ninp, nhid, chunk_size, nlayers, dropout=0.5, dropouth=0.5, dropouti=0.5, dropoute=0.1, wdrop=0,tie_weights=False, is_train_dependency=False):
         super(DP_ONLSTMModel, self).__init__()
         self.lockdrop = LockedDropout()
@@ -28,6 +27,7 @@ class DP_ONLSTMModel(nn.Module):
         self.decoder = nn.Linear(ninp, ntoken)
 
         self.query = nn.Linear(in_features=ninp, out_features=ninp)
+        self.value = nn.Linear(in_features=ninp, out_features=ninp)
         if tie_weights:
             #if nhid != ninp:
             #    raise ValueError('When using the tied flag, nhid must be equal to emsize')
@@ -53,6 +53,8 @@ class DP_ONLSTMModel(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
         self.query.bias.data.fill_(0)
         self.query.weight.data.uniform_(-initrange, initrange)
+        self.value.bias.data.fill_(0)
+        self.value.weight.data.uniform_(-initrange, initrange)
     
     def forward(self, input, hidden, return_h=False, context_length=-1):
         if self.is_train_dependency:
@@ -119,7 +121,7 @@ class DP_ONLSTMModel(nn.Module):
         seq_len, batch_size, hid_size = H.size()
         query = self.query(last).transpose(0,1) # (b, s, h)
         # H.permute(1,2,0) : [b, h, s]
-        attention  = torch.bmm(query, H.permute(1,2,0)) #  ::(b, s, s)
+        attention  = torch.bmm(query, self.value(H).permute(1,2,0)) #  ::(b, s, s)
         attention = attention / math.sqrt(hid_size)
         tgt_seq_mask = torch.triu(
                 utils.fill_with_neg_inf(torch.zeros([seq_len, seq_len])), 1
@@ -171,6 +173,7 @@ class DP_RNNModel(nn.Module):
         # "Tying Word Vectors and Word Classifiers: A Loss Framework for Language Modeling" (Inan et al. 2016)
         # https://arxiv.org/abs/1611.01462
         self.query = nn.Linear(in_features=ninp, out_features=ninp)
+        self.value = nn.Linear(in_features=ninp, out_features=ninp)
         if tie_weights:
             #if nhid != ninp:
             #    raise ValueError('When using the tied flag, nhid must be equal to emsize')
@@ -198,6 +201,8 @@ class DP_RNNModel(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
         self.query.bias.data.fill_(0)
         self.query.weight.data.uniform_(-initrange, initrange)
+        self.value.bias.data.fill_(0)
+        self.value.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, input, hidden, return_h=False, context_length=-1):
         if self.is_train_dependency:
@@ -298,7 +303,7 @@ class DP_RNNModel(nn.Module):
         seq_len, batch_size, hid_size = H.size()
         query = self.query(last).transpose(0,1) # (b, s, h)
         # H.permute(1,2,0) : [b, h, s]
-        attention  = torch.bmm(query, H.permute(1,2,0)) #  ::(b, s, s)
+        attention  = torch.bmm(query, self.value(H).permute(1,2,0)) #  ::(b, s, s)
         attention = attention / math.sqrt(hid_size)
         tgt_seq_mask = torch.triu(
                 utils.fill_with_neg_inf(torch.zeros([seq_len, seq_len])), 1
