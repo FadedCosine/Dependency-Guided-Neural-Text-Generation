@@ -89,7 +89,7 @@ class LanguageModelingConfig(FairseqDataclass):
     plasma_path: str = II("common.plasma_path")
 
     dependency: str = field(
-        default="/home/yangzhixian/DependencyGuided/data/news/dependency",
+        default="~/DependencyGuided/data/news/dependency",
         metadata={
             "help": "path to data dependency"
         },
@@ -111,32 +111,6 @@ class DependencyModelingTask(LegacyFairseqTask):
             the language model
         
     """
-    # @staticmethod
-    # def add_args(parser):
-    #     """Add task-specific arguments to the parser."""
-    #     print("add_args")
-    #     parser.add_argument("data", help="path to data directory")
-    #     parser.add_argument(
-    #         "--tokens-per-sample",
-    #         default=64,
-    #         type=int,
-    #         help="max number of total tokens over all segments"
-    #         " per sample for dataset",
-    #     )
-    #     parser.add_argument(
-    #         "--sample-break-mode",
-    #         default="eos",
-    #         type=str,
-    #         help="mode for breaking sentence",
-    #     )
-    #     parser.add_argument("--dependency",
-    #                     type=str,
-    #                     default="/home/yangzhixian/DependencyGuided/DG/data/news/dependency",
-    #                     help="path to data dependency")
-    #     parser.add_argument("--dependency_suffix",
-    #                     type=str,
-    #                     default=".head",
-    #                     help="file suffix of dependency head file")
     def __init__(self, args, dictionary, output_dictionary=None,):
         super().__init__(args)
         self.dictionary = dictionary

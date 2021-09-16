@@ -190,7 +190,7 @@ class DPTransformerLanguageModelConfig(FairseqDataclass):
 
     # for dependency pointer
     data_path_for_load_model: str = field(
-        default="/home/yangzhixian/DependencyGuided/data/news/data-bin",
+        default="~/DependencyGuided/data/news/data-bin",
         metadata={
             "help": "path to data"
         },
@@ -202,7 +202,7 @@ class DPTransformerLanguageModelConfig(FairseqDataclass):
         default=-1, metadata={"help": "layer number to be used for pointing (0 corresponding to the bottommost layer)"}
     )
     dependency_model_path: str = field(
-        default="/home/yangzhixian/DependencyGuided/DG/checkpoints/news/dependency_predictor",
+        default="~/DependencyGuided/DPLM-Transformer/checkpoints/news/dependency_lm",
         metadata={
             "help": "model path of dependency decoder model"
         },
@@ -315,11 +315,6 @@ class DGTransformerPointerGeneratorDecoder(TransformerDecoder):
         input_embed_dim = embed_tokens.embedding_dim
         assert args.dependency_model_path is not None
         assert args.dependency_model_filename is not None
-        # print("args.dependency_model_path is : ", args.dependency_model_path)
-        # print("args.dependency_model_filename is : ", args.dependency_model_filename)
-        # print("args.data_path_for_load_model is : ", args.data_path_for_load_model)
-        args.dependency_model_path = "/home/yangzhixian/DependencyGuided/DPLM-Transformer/checkpoints/news/dependency_lm_CE"
-        args.data_path_for_load_model = "/home/yangzhixian/DependencyGuided/data/news/data-bin"
         self.dependency_module = hub_utils.from_pretrained(
             args.dependency_model_path,
             args.dependency_model_filename,
@@ -696,12 +691,12 @@ def base_lm_architecture(args):
     args.offload_activations = getattr(args, "offload_activations", False)
     if args.offload_activations:
         args.checkpoint_activations = True
-    args.data_path_for_load_model = getattr(args, "data_path_for_load_model", "/home/yangzhixian/DependencyGuided/data/news/data-bin")
+    args.data_path_for_load_model = getattr(args, "data_path_for_load_model", "~/DependencyGuided/data/news/data-bin")
     args.alignment_heads = getattr(args, "alignment_heads", 1)
     args.alignment_layer = getattr(args, "alignment_layer", -1)
     if args.alignment_layer < 0:
         args.alignment_layer = args.decoder_layers + args.alignment_layer
-    args.dependency_model_path = getattr(args, "dependency_model_path", "/home/yangzhixian/DependencyGuided/DPLM-Transformer/checkpoints/news/dependency_lm_CE")
+    args.dependency_model_path = getattr(args, "dependency_model_path", "~/DependencyGuided/DPLM-Transformer/checkpoints/news/dependency_lm_CE")
     args.dependency_model_filename = getattr(args, "dependency_model_filename", "checkpoint_best.pt")
     args.force_generation = getattr(args, "force_generation", 0)
     args.freeze_dependency_decoder = getattr(args, "freeze_dependency_decoder", False)

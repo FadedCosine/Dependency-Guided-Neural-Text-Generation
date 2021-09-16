@@ -53,9 +53,9 @@ def build_subword_dependecy_head(tok_dependency_headlist, word_to_bpe_index_list
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--token_level_path",type=str, default="/home/yangzhixian/DependencyGuided/DPDecoder/data/news/tmp")
+    parser.add_argument("--token_level_path",type=str, default="../data/news/tmp")
     parser.add_argument('--filename',type=str, default="valid.txt")
-    parser.add_argument("--bpe_level_path",type=str, default="/home/yangzhixian/DependencyGuided/DPDecoder/data/news")
+    parser.add_argument("--bpe_level_path",type=str, default="../data/news")
     parser.add_argument('--dependency_filename',type=str, default="valid.head")
 
     return parser.parse_args()
