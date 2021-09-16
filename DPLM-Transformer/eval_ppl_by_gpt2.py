@@ -54,8 +54,8 @@ def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--top-p',type=float, default=0.9)
     parser.add_argument('--top-k',type=int, default=0)
-    parser.add_argument('--model_file', type=str, default="/home/yangzhixian/pretrained_model/gpt2-base")
-    parser.add_argument('--cuda_num', type=str, default='3')
+    parser.add_argument('--model_file', type=str, default="~/pretrained_model/gpt2-base")
+    parser.add_argument('--cuda_num', type=str, default='1')
     parser.add_argument('--folderpath', type=str, default="checkpoints/ptb/samples/")
     return parser.parse_args()
 

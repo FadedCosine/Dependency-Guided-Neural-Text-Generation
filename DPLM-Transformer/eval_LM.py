@@ -81,11 +81,11 @@ def main():
 
     logger.info('--------------------ms_jaccard(Up)----------------------')
     for i in msj.keys():
-        logger.info('{:<64}{}, {}, {}'.format(os.path.basename(i),  round(msj[i][0] * 100,1),  round(msj[i][1] * 100,1),  round(msj[i][2] * 100,1)))
+        logger.info('{:<64}{}, {}, {}'.format(os.path.basename(i),  round(msj[i][0] * 100,2),  round(msj[i][1] * 100,2),  round(msj[i][2] * 100,2)))
 
     logger.info('--------------------distinct(Up)----------------------')
     for i in dist.keys():
-        logger.info('{:<64}{}, {}, {}'.format(os.path.basename(i), round(dist[i][0] * 100,1), round(dist[i][1] * 100,1), round(dist[i][2] * 100,1)))
+        logger.info('{:<64}{}, {}, {}'.format(os.path.basename(i), round(dist[i][0] * 100,2), round(dist[i][1] * 100,2), round(dist[i][2] * 100,2)))
 
     logger.info('--------------------uniq_seq(Up)----------------------')
     for i in uniq.keys():
@@ -93,11 +93,11 @@ def main():
 
     logger.info('--------------------bleu(Up)----------------------')
     for i in bleu.keys():
-        logger.info('{:<64}{}'.format(os.path.basename(i), round(bleu[i]*100,1)))
+        logger.info('{:<64}{}'.format(os.path.basename(i), round(bleu[i]*100,2)))
         
     logger.info('--------------------self-bleu(Down)----------------------')
     for i in self_bleu5.keys():
-        logger.info('{:<64}{}'.format(os.path.basename(i), round(self_bleu5[i]*100,1)))
+        logger.info('{:<64}{}'.format(os.path.basename(i), round(self_bleu5[i]*100,2)))
 
 
 

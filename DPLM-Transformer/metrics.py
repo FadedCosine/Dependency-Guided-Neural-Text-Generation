@@ -232,6 +232,16 @@ def distinct_n_corpus_level(sentences, n):
     """
     return sum(distinct_n_sentence_level(sentence, n) for sentence in sentences) / len(sentences)
 
+def distinct_n_corpus_level_single_sent(sentences, n):
+    """
+    Compute average distinct-N of a list of sentences (the corpus).
+    :param sentences: a list of sentence.
+    :param n: int, ngram.
+    :return: float, the average value.
+    """
+    return [distinct_n_sentence_level(sentence, n) for sentence in sentences]
+
+
 def compute_probs(cnter,token_lists):
     tot = 0
     probs = []
@@ -304,6 +314,18 @@ def calc_bleu_ngram(reference, hypothesis, n_gram):
         score += sentence_bleu([refer], hypo, (ratio,) * n_gram, cc.method1)
     
     return score / len(reference)
+
+def calc_bleu_ngram_singe_sent(reference, hypothesis, n_gram):
+    score = []
+    ratio = 1 / n_gram
+
+    cc = SmoothingFunction()
+
+    for refer, hypo in zip(reference, hypothesis):
+        # refer.index()
+        score.append(sentence_bleu([refer], hypo, (ratio,) * n_gram, cc.method1))
+    
+    return score
 
 
 def ref_cnts2(references,n):
@@ -383,6 +405,27 @@ def selfbleu(x, n):
             s = bp * math.exp(math.fsum(s))
             bleu_scores[i].append(s)
     return [np.mean(bleu_scores[i]) for i in range(1,n+1)]
+
+def selfbleu_singe_sent(x, n):
+    x_mcnts = {i: ref_cnts2(x, i) for i in range(1, n + 1)}
+    x_lens = [len(i) for i in x]
+    bleu_scores = {i:[] for i in range(1,n+1)}
+    for idx, hyp in enumerate(x):
+        p_numerators = Counter()  # Key = ngram order, and value = no. of ngram matches.
+        p_denominators = Counter()  # Key = ngram order, and value = no. of ngram in ref.
+        for i in range(1, n + 1):
+            p_i = modified_precision(x_mcnts[i], hyp, i,True)
+            p_numerators[i] = p_i.numerator
+            p_denominators[i] = p_i.denominator
+        hyp_lengths = len(hyp)
+        ref_lengths = closest_ref_length(iter(x_lens[:idx] + x_lens[idx+1:]), hyp_lengths)
+        bp = brevity_penalty(ref_lengths, hyp_lengths)
+        for i in range(1,n+1):
+            if p_numerators[i] == 0: p_numerators[i] = 1e-100
+            s = (1 / i * math.log(p_numerators[j] / p_denominators[j]) for j in range(1, i + 1))
+            s = bp * math.exp(math.fsum(s))
+            bleu_scores[i].append(s)
+    return bleu_scores
 
 def repetition(hyps):
     """

@@ -64,33 +64,33 @@ def main():
             if len(line_split) != 0:
                 predict.append(line_split)
                 gt.append(ground_truth[line_idx])
-        # bleu[filename] = bleu_upto(gt, predict, 5)
-        # self_bleu[filename] = selfbleu(predict, 5)
-        dist[filename] = distinct_document(predict, 4)
-        # repit[filename] = repetition(predict)
-        # s = set()
-        # for i in predict:
-        #     s.update(i)
-        # uniq[filename] = len(s)
+        bleu[filename] = bleu_upto(gt, predict, 5)
+        self_bleu[filename] = selfbleu(predict, 5)
+        dist[filename] = distinct_document(predict, 4) # 如果使用distinct_upto，因为是每个句子计算distinct在平均，这样的话的得到的结果将会很大 95.29, 99.37, 99.8, 99.94
+        repit[filename] = repetition(predict)
+        s = set()
+        for i in predict:
+            s.update(i)
+        uniq[filename] = len(s)
     
   
-    # logger.info('--------------------repetition(Down)----------------------')
-    # for i in bleu.keys():
-    #     logger.info('{:<65}{:.6f}'.format(os.path.basename(i), repit[i]))
+    logger.info('--------------------repetition(Down)----------------------')
+    for i in bleu.keys():
+        logger.info('{:<65}{:.6f}'.format(os.path.basename(i), repit[i]))
 
-    # logger.info('--------------------bleu(Up)----------------------')
-    # for i in bleu.keys():
-    #     logger.info('{:<65}{}, {}, {}, {}, {}'.format(os.path.basename(i), round(bleu[i][0] * 100, 2), round(bleu[i][1] * 100,2), round(bleu[i][2] * 100,2), round(bleu[i][3] * 100,2), round(bleu[i][4] * 100,2)))
-    # logger.info('--------------------self-bleu(Down)----------------------')
-    # for i in self_bleu.keys():
-    #     logger.info('{:<65}{}, {}, {}, {}, {}'.format(os.path.basename(i), round(self_bleu[i][0] * 100, 2), round(self_bleu[i][1] * 100,2), round(self_bleu[i][2] * 100,2), round(self_bleu[i][3] * 100,2), round(self_bleu[i][4] * 100,2)))
+    logger.info('--------------------bleu(Up)----------------------')
+    for i in bleu.keys():
+        logger.info('{:<65}{}, {}, {}, {}, {}'.format(os.path.basename(i), round(bleu[i][0] * 100, 2), round(bleu[i][1] * 100,2), round(bleu[i][2] * 100,2), round(bleu[i][3] * 100,2), round(bleu[i][4] * 100,2)))
+    logger.info('--------------------self-bleu(Down)----------------------')
+    for i in self_bleu.keys():
+        logger.info('{:<65}{}, {}, {}, {}, {}'.format(os.path.basename(i), round(self_bleu[i][0] * 100, 2), round(self_bleu[i][1] * 100,2), round(self_bleu[i][2] * 100,2), round(self_bleu[i][3] * 100,2), round(self_bleu[i][4] * 100,2)))
 
     logger.info('--------------------distinct(Up)----------------------')
     for i in dist.keys():
         logger.info('{:<64}{}, {}, {}, {}'.format(os.path.basename(i), round(dist[i][0] * 100,2), round(dist[i][1] * 100,2), round(dist[i][2] * 100,2), round(dist[i][3] * 100,2)))
-    # logger.info('--------------------uniq_seq(Up)----------------------')
-    # for i in uniq.keys():
-    #     logger.info('{:<64}{}'.format(os.path.basename(i), uniq[i]))
+    logger.info('--------------------uniq_seq(Up)----------------------')
+    for i in uniq.keys():
+        logger.info('{:<64}{}'.format(os.path.basename(i), uniq[i]))
 
 
 if __name__ =='__main__':
