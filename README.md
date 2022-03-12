@@ -1,5 +1,7 @@
 # Dependency-based Mixture Language Models
 
+Code for paper **Dependency-based Mixture Language Models** by Zhixian Yang, and Xiaojun Wan. This paper is accepted by ACL'22.
+
 | Table of Contents |
 |-|
 | [Setup](#setup)|
