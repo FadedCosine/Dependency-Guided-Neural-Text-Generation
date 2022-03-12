@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch._C import device
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim.lr_scheduler as lr_scheduler
 from functools import partial
 import data
@@ -50,8 +51,6 @@ def evaluate(args, data_source, data_dependency, model, corpus, criterion, batch
     for i in range(0, data_source.size(0) - 1, args.bptt):
         # input = batch['net_input']['src_tokens'].to(args.device).t()
         # targets = batch['target'].to(args.device).t()
-        
-        # print("targets is : ", [ corpus.dictionary.idx2word[id] for id in targets])
         if args.is_train_dependency:
             input, targets = get_dep_batch(data_source, data_dependency, i, args)
             output, hidden = model(input, hidden)
@@ -59,7 +58,8 @@ def evaluate(args, data_source, data_dependency, model, corpus, criterion, batch
             input, targets = get_batch(data_source, i, args)
             dep_logits, attn_weight, hidden = model(input, hidden,context_length=args.context_length)
             dep_logits = dep_logits.transpose(0,1)
-            output = torch.bmm(attn_weight, dep_logits).transpose(0,1)
+            dep_probs = F.softmax(dep_logits, dim=-1)
+            output = torch.bmm(attn_weight, dep_probs).transpose(0,1).log()
         output = output.contiguous().view(-1, ntokens)
         total_loss += len(input) * criterion(output, targets).data
         hidden = repackage_hidden(hidden)
@@ -101,8 +101,11 @@ def train_a_epoch(args, train_dataset, train_dependency, model, corpus, optimize
             # dep_logits is [seq_len, batch_size, ntokens]
             # attn_weight is [b, s, s]
             dep_logits = dep_logits.transpose(0,1)
+            dep_probs = F.softmax(dep_logits, dim=-1)
+            # print("torch.sum(dep_probs, dim=-1) is : ", torch.sum(dep_probs, dim=-1))
             # dep_logits is [batch_size, seq_len, ntokens]
-            output = torch.bmm(attn_weight, dep_logits).transpose(0,1)
+            output = torch.bmm(attn_weight, dep_probs).transpose(0,1).log()
+            # print("torch.sum(output, dim=-1) is : ", torch.sum(output, dim=-1))
         output = output.contiguous().view(-1, ntokens)
         # dep_logits = dep_logits.transpose(0,1).contiguous().view(-1, ntokens)
         # split_cross_loss = split_cross_criterion(model.decoder.weight, model.decoder.bias, result, targets)
@@ -315,7 +318,7 @@ def main():
     if args.is_train_dependency:
         criterion = DependencyCrossEntropy()
     else:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.NLLLoss()
     ntokens = len(corpus.dictionary)
         
     if args.model == "DP_ONLSTM":
