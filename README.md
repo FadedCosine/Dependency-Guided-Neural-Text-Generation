@@ -111,3 +111,21 @@ python eval_stories.py --folderpath FOLDER_FOR_EVALUATION
 ```
 
 Besides, we also calculate the [UNION](https://github.com/thu-coai/UNION) and [BERTScore](https://github.com/Tiiiger/bert_score) and for the story ending generation task.
+
+## **Citation**
+If you find our paper useful to your work, please kindly cite our paper:
+
+```
+@inproceedings{yang-wan-2022-dependency,
+    title = "Dependency-based Mixture Language Models",
+    author = "Yang, Zhixian  and
+      Wan, Xiaojun",
+    booktitle = "Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)",
+    month = may,
+    year = "2022",
+    address = "Dublin, Ireland",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2022.acl-long.535",
+    pages = "7758--7773",
+}
+```
